@@ -2,9 +2,23 @@
 
 ## 🌐 API Overview
 
-This document defines the REST API specifications for our mini Facebook backend. All APIs follow RESTful conventions and use JSON for data exchange.
+This document defines the REST API specifications for our mini Facebook backend microservices. All APIs follow RESTful conventions and use JSON for data exchange. Each service has its own API endpoints and communicates through events.
 
-## 🔧 API Gateway Configuration
+## 🏗️ Microservices Architecture
+
+### Service Endpoints
+```
+API Gateway: http://localhost:3000/api/v1
+├── Auth Service: http://localhost:3100/api/v1/auth
+├── User Service: http://localhost:3200/api/v1/users  
+├── Post Service: http://localhost:3300/api/v1/posts
+├── Message Service: http://localhost:3400/api/v1/messages
+├── Media Service: http://localhost:3500/api/v1/media
+├── Search Service: http://localhost:3600/api/v1/search
+└── Notification Service: http://localhost:3700/api/v1/notifications
+```
+
+### API Gateway Configuration
 
 ### Base URL Structure
 ```
@@ -50,7 +64,10 @@ X-Client-Version: 1.0.0
 }
 ```
 
-## 🔐 Authentication Service API
+## 🔐 Authentication Service API (Port 3100)
+
+**Database**: `auth_service_db`  
+**Responsibilities**: Authentication, authorization, sessions, password resets
 
 ### POST /auth/register
 Register a new user account.
@@ -158,7 +175,20 @@ Reset password using reset token.
 }
 ```
 
-## 👤 User Service API
+### POST /auth/verify-email
+Verify user email address.
+
+**Request Body:**
+```json
+{
+  "token": "verification-token-123"
+}
+```
+
+## 👤 User Service API (Port 3200)
+
+**Database**: `user_service_db`  
+**Responsibilities**: User profiles, friendships, privacy settings, user search
 
 ### GET /users/profile
 Get current user's profile.
@@ -322,7 +352,33 @@ Get user's friends list.
 }
 ```
 
-## 📝 Post Service API
+### PUT /users/friends/{id}/accept
+Accept friend request.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "friendshipId": "friendship-123",
+    "status": "accepted",
+    "acceptedAt": "2024-01-15T10:30:00Z"
+  },
+  "message": "Friend request accepted"
+}
+```
+
+### DELETE /users/friends/{id}
+Remove friend or reject friend request.
+
+**Headers:** `Authorization: Bearer <token>`
+
+## 📝 Post Service API (Port 3300)
+
+**Database**: `post_service_db`  
+**Responsibilities**: Posts, comments, reactions, news feed algorithm
 
 ### GET /posts/feed
 Get user's news feed.
@@ -489,7 +545,18 @@ Add reaction to post.
 
 **Available reaction types:** `like`, `love`, `laugh`, `angry`, `sad`
 
-## 💬 Message Service API
+### DELETE /posts/{postId}/reactions
+Remove reaction from post.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Query Parameters:**
+- `type` (string): Reaction type to remove
+
+## 💬 Message Service API (Port 3400)
+
+**Database**: `message_service_db`  
+**Responsibilities**: Direct messages, group conversations, real-time chat
 
 ### GET /messages/conversations
 Get user's conversations.
@@ -617,7 +684,15 @@ Mark message as read.
 
 **Headers:** `Authorization: Bearer <token>`
 
-## 📁 Media Service API
+### DELETE /messages/{messageId}
+Delete message.
+
+**Headers:** `Authorization: Bearer <token>`
+
+## 📁 Media Service API (Port 3500)
+
+**Database**: `media_service_db`  
+**Responsibilities**: File uploads, media processing, CDN integration
 
 ### POST /media/upload
 Upload media file.
@@ -660,7 +735,31 @@ Delete media file.
 
 **Headers:** `Authorization: Bearer <token>`
 
-## 🔍 Search Service API
+### POST /media/batch-upload
+Upload multiple media files.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Content-Type:** `multipart/form-data`
+
+**Form Data:**
+- `files[]`: Array of media files
+- `type`: Media type ("profile", "post", "message")
+
+### GET /media/user/{userId}
+Get user's media files.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Query Parameters:**
+- `type` (string): Filter by media type
+- `limit` (number): Results limit (default: 20)
+- `offset` (number): Results offset (default: 0)
+
+## 🔍 Search Service API (Port 3600)
+
+**Database**: Elasticsearch indices  
+**Responsibilities**: Full-text search, user search, search suggestions
 
 ### GET /search/posts
 Search posts by content.
@@ -723,7 +822,43 @@ Get search suggestions.
 **Query Parameters:**
 - `q` (string): Partial search query
 
-## 🔔 Notification Service API
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "suggestions": [
+      "john doe",
+      "jane smith", 
+      "javascript tutorial"
+    ]
+  }
+}
+```
+
+### GET /search/trending
+Get trending search terms.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "trending": [
+      { "term": "javascript", "count": 150 },
+      { "term": "react", "count": 120 },
+      { "term": "nodejs", "count": 100 }
+    ]
+  }
+}
+```
+
+## 🔔 Notification Service API (Port 3700)
+
+**Database**: `notification_service_db`  
+**Responsibilities**: Push notifications, email notifications, notification preferences
 
 ### GET /notifications
 Get user notifications.
@@ -800,6 +935,84 @@ Update notification preferences.
 }
 ```
 
+### POST /notifications/mark-all-read
+Mark all notifications as read.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "markedCount": 15,
+    "message": "All notifications marked as read"
+  }
+}
+```
+
+### GET /notifications/unread-count
+Get count of unread notifications.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "unreadCount": 5
+  }
+}
+```
+
+## 🔄 Event-Driven Communication
+
+### Service Communication Events
+Services communicate through RabbitMQ events instead of direct API calls:
+
+```typescript
+// Example: Post creation flow
+1. User Service: Validates user exists
+2. Post Service: Creates post in its database  
+3. Post Service: Publishes "post.created" event
+4. Search Service: Receives event, indexes post
+5. Notification Service: Receives event, notifies followers
+```
+
+### Event Types
+```typescript
+// User Events
+"user.registered" - User completes registration
+"user.profile.updated" - User profile is updated
+"user.deleted" - User account is deleted
+
+// Friend Events  
+"friend.request.sent" - Friend request is sent
+"friend.request.accepted" - Friend request is accepted
+"friend.removed" - Friendship is removed
+
+// Post Events
+"post.created" - New post is created
+"post.updated" - Post content is updated
+"post.deleted" - Post is deleted
+"post.liked" - Post receives a reaction
+"comment.added" - Comment is added to post
+
+// Message Events
+"message.sent" - Message is sent
+"conversation.created" - New conversation is created
+
+// Media Events
+"media.uploaded" - Media file is uploaded
+"media.processed" - Media processing is complete
+"media.deleted" - Media file is deleted
+
+// Notification Events
+"notification.created" - New notification is created
+"notification.read" - Notification is marked as read
+```
+
 ## 📊 Rate Limiting
 
 ### Rate Limits
@@ -843,4 +1056,67 @@ X-RateLimit-Reset: 1642248000
 }
 ```
 
-This API specification provides a comprehensive foundation for building our mini Facebook backend, with clear endpoints, request/response formats, and security considerations.
+## 🔒 Service-to-Service Authentication
+
+### JWT Service Tokens
+Services authenticate with each other using service-specific JWT tokens:
+
+```typescript
+interface ServiceToken {
+  serviceId: string;
+  permissions: string[];
+  expiresAt: Date;
+}
+
+// Example service token
+{
+  "serviceId": "post-service",
+  "permissions": ["read:posts", "write:posts"],
+  "expiresAt": "2024-01-15T11:30:00Z"
+}
+```
+
+### Service Authentication Headers
+```http
+Authorization: Bearer <service_jwt_token>
+X-Service-ID: post-service
+X-Request-ID: <unique_request_id>
+```
+
+## 🚀 Deployment Configuration
+
+### Service Discovery
+```yaml
+# docker-compose.yml
+services:
+  api-gateway:
+    image: mini-facebook/gateway:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:3100
+      - USER_SERVICE_URL=http://user-service:3200
+      - POST_SERVICE_URL=http://post-service:3300
+      - MESSAGE_SERVICE_URL=http://message-service:3400
+      - MEDIA_SERVICE_URL=http://media-service:3500
+      - SEARCH_SERVICE_URL=http://search-service:3600
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3700
+
+  auth-service:
+    image: mini-facebook/auth-service:latest
+    ports:
+      - "3100:3100"
+    environment:
+      - DATABASE_URL=postgresql://user:pass@auth-db:5432/auth_service_db
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+
+  user-service:
+    image: mini-facebook/user-service:latest
+    ports:
+      - "3200:3200"
+    environment:
+      - DATABASE_URL=postgresql://user:pass@user-db:5432/user_service_db
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+```
+
+This API specification provides a comprehensive foundation for building our mini Facebook backend microservices, with clear service boundaries, event-driven communication, and proper authentication mechanisms.
