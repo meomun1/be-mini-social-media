@@ -2,7 +2,7 @@
 
 ## ⚡ Overview
 
-WebSockets enable real-time bidirectional communication for our mini Facebook backend, supporting live chat, notifications, typing indicators, and other instant updates.
+WebSockets enable real-time bidirectional communication for our mini Facebook backend microservices, supporting live chat, notifications, typing indicators, and other instant updates. The WebSocket server is integrated with the API Gateway and communicates with microservices through events.
 
 ## 🏗️ WebSocket Setup
 
@@ -287,26 +287,43 @@ export class SocketServer {
   }
 
   private async saveMessage(data: any): Promise<void> {
-    // Implementation depends on your message service
-    // This would typically call your message repository
+    // Send event to Message Service via RabbitMQ
+    await this.eventPublisher.publish('message.save', {
+      conversationId: data.conversationId,
+      senderId: data.senderId,
+      content: data.content,
+      messageType: data.messageType
+    });
   }
 
   private async saveFriendRequest(data: any): Promise<void> {
-    // Implementation depends on your user service
+    // Send event to User Service via RabbitMQ
+    await this.eventPublisher.publish('friend.request.save', {
+      fromUserId: data.fromUserId,
+      toUserId: data.toUserId,
+      status: data.status
+    });
   }
 
   private async saveReaction(data: any): Promise<void> {
-    // Implementation depends on your post service
+    // Send event to Post Service via RabbitMQ
+    await this.eventPublisher.publish('reaction.save', {
+      postId: data.postId,
+      userId: data.userId,
+      reactionType: data.reactionType
+    });
   }
 
   private async getUserProfile(userId: string): Promise<any> {
-    // Implementation depends on your user service
-    return { id: userId, username: 'user' };
+    // Call User Service API
+    const response = await this.httpClient.get(`${process.env.USER_SERVICE_URL}/api/v1/users/${userId}`);
+    return response.data;
   }
 
   private async getPostOwner(postId: string): Promise<string> {
-    // Implementation depends on your post service
-    return 'user-id';
+    // Call Post Service API
+    const response = await this.httpClient.get(`${process.env.POST_SERVICE_URL}/api/v1/posts/${postId}`);
+    return response.data.userId;
   }
 
   // Public methods for external use
@@ -570,14 +587,127 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, receiverId, token })
 
 ## 📊 Real-time Features
 
-### Live Notifications
+### Event-Driven WebSocket Communication
+```typescript
+// infrastructure/websocket/eventHandler.ts
+import { SocketServer } from './socketServer';
+import { EventConsumer } from '@/infrastructure/rabbitmq/eventConsumer';
+import { logger } from '@/shared/utils/logger';
+
+export class WebSocketEventHandler {
+  constructor(
+    private socketServer: SocketServer,
+    private eventConsumer: EventConsumer
+  ) {
+    this.setupEventHandlers();
+  }
+
+  private setupEventHandlers(): void {
+    // Listen to events from microservices
+    this.eventConsumer.on('notification.created', this.handleNotificationCreated.bind(this));
+    this.eventConsumer.on('message.sent', this.handleMessageSent.bind(this));
+    this.eventConsumer.on('friend.request.sent', this.handleFriendRequestSent.bind(this));
+    this.eventConsumer.on('post.liked', this.handlePostLiked.bind(this));
+    this.eventConsumer.on('user.online', this.handleUserOnline.bind(this));
+    this.eventConsumer.on('user.offline', this.handleUserOffline.bind(this));
+  }
+
+  private async handleNotificationCreated(event: any): Promise<void> {
+    const { userId, notification } = event.data;
+    
+    this.socketServer.emitToUser(userId, 'notification:new', {
+      id: notification.id,
+      type: notification.type,
+      title: notification.title,
+      message: notification.message,
+      data: notification.data,
+      createdAt: notification.createdAt,
+      isRead: notification.isRead
+    });
+
+    logger.info('Real-time notification sent via WebSocket', { 
+      userId, 
+      type: notification.type 
+    });
+  }
+
+  private async handleMessageSent(event: any): Promise<void> {
+    const { conversationId, senderId, receiverId, message } = event.data;
+    
+    // Emit to conversation participants
+    this.socketServer.emitToConversation(conversationId, 'message:received', {
+      id: message.id,
+      senderId: message.senderId,
+      content: message.content,
+      messageType: message.messageType,
+      createdAt: message.createdAt
+    });
+
+    // Emit to specific receiver if they're online
+    this.socketServer.emitToUser(receiverId, 'message:direct', {
+      id: message.id,
+      conversationId,
+      senderId,
+      content: message.content,
+      createdAt: message.createdAt
+    });
+  }
+
+  private async handleFriendRequestSent(event: any): Promise<void> {
+    const { fromUserId, toUserId, friendship } = event.data;
+    
+    this.socketServer.emitToUser(toUserId, 'friend:request_received', {
+      id: friendship.id,
+      fromUserId,
+      fromUser: await this.getUserProfile(fromUserId),
+      createdAt: friendship.createdAt
+    });
+  }
+
+  private async handlePostLiked(event: any): Promise<void> {
+    const { postId, userId, likerId, reaction } = event.data;
+    
+    this.socketServer.emitToUser(userId, 'post:liked', {
+      postId,
+      likerId,
+      liker: await this.getUserProfile(likerId),
+      reactionType: reaction.type,
+      createdAt: reaction.createdAt
+    });
+  }
+
+  private async handleUserOnline(event: any): Promise<void> {
+    const { userId } = event.data;
+    
+    this.socketServer.broadcast('user:online', { userId });
+  }
+
+  private async handleUserOffline(event: any): Promise<void> {
+    const { userId } = event.data;
+    
+    this.socketServer.broadcast('user:offline', { userId });
+  }
+
+  private async getUserProfile(userId: string): Promise<any> {
+    // Call User Service API
+    const response = await this.httpClient.get(`${process.env.USER_SERVICE_URL}/api/v1/users/${userId}`);
+    return response.data;
+  }
+}
+```
+
+### Live Notifications Service
 ```typescript
 // infrastructure/websocket/notificationService.ts
 import { SocketServer } from './socketServer';
+import { EventPublisher } from '@/infrastructure/rabbitmq/eventPublisher';
 import { logger } from '@/shared/utils/logger';
 
 export class RealTimeNotificationService {
-  constructor(private socketServer: SocketServer) {}
+  constructor(
+    private socketServer: SocketServer,
+    private eventPublisher: EventPublisher
+  ) {}
 
   async sendNotification(userId: string, notification: {
     type: string;
@@ -586,17 +716,18 @@ export class RealTimeNotificationService {
     data?: any;
   }): Promise<void> {
     try {
-      this.socketServer.emitToUser(userId, 'notification:new', {
-        id: this.generateId(),
+      // Publish event to Notification Service
+      await this.eventPublisher.publish('notification.create', {
         userId,
-        ...notification,
-        createdAt: new Date().toISOString(),
-        isRead: false
+        type: notification.type,
+        title: notification.title,
+        message: notification.message,
+        data: notification.data
       });
 
-      logger.info('Real-time notification sent', { userId, type: notification.type });
+      logger.info('Notification event published', { userId, type: notification.type });
     } catch (error) {
-      logger.error('Failed to send real-time notification:', { userId, error });
+      logger.error('Failed to publish notification event:', { userId, error });
     }
   }
 
@@ -618,8 +749,13 @@ export class RealTimeNotificationService {
     });
   }
 
-  private generateId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  async sendMessageNotification(userId: string, senderId: string, message: string): Promise<void> {
+    await this.sendNotification(userId, {
+      type: 'message',
+      title: 'New Message',
+      message: `You have a new message from ${senderId}`,
+      data: { senderId, message }
+    });
   }
 }
 ```
