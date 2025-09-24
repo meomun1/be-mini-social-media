@@ -17,38 +17,90 @@ A comprehensive backend system for a mini social media platform similar to Faceb
               ┌──────────────┐                ┌──────────────┐                ┌──────────────┐
               │   Auth       │                │   Posts      │                │   Messages   │
               │   Service    │                │   Service    │                │   Service    │
+              │   (Port 3100)│                │   (Port 3300)│                │   (Port 3400)│
               └──────────────┘                └──────────────┘                └──────────────┘
                        │                                 │                                 │
               ┌──────────────┐                ┌──────────────┐                ┌──────────────┐
               │   Users      │                │   Media      │                │   Search     │
               │   Service    │                │   Service    │                │   Service    │
+              │   (Port 3200)│                │   (Port 3500)│                │   (Port 3600)│
+              └──────────────┘                └──────────────┘                └──────────────┘
+                       │                                 │                                 │
+              ┌──────────────┐                ┌──────────────┐                ┌──────────────┐
+              │ Notification │                │   RabbitMQ   │                │  Elasticsearch│
+              │   Service    │                │  Event Bus   │                │   Search     │
+              │   (Port 3700)│                │   (Port 5672)│                │   (Port 9200)│
               └──────────────┘                └──────────────┘                └──────────────┘
                        │                                 │                                 │
                        └─────────────────────────────────┼─────────────────────────────────┘
                                                          ▼
                                     ┌─────────────────────────────────┐
                                     │        Data Layer               │
-                                    │  PostgreSQL + Redis + ES       │
+                                    │  Multiple Databases + Redis    │
                                     └─────────────────────────────────┘
 ```
 
 ## 🎨 Design Principles
 
 ### 1. Domain-Driven Design (DDD)
-- **Bounded Contexts**: Each service owns its domain
+- **Bounded Contexts**: Each service owns its domain and data
 - **Ubiquitous Language**: Consistent terminology across teams
 - **Aggregate Roots**: Clear data ownership boundaries
 
 ### 2. Event-Driven Architecture
-- **Asynchronous Communication**: Services communicate via events
-- **Loose Coupling**: Services are independent and scalable
+- **Asynchronous Communication**: Services communicate via events (RabbitMQ)
+- **Loose Coupling**: Services are independent and don't call each other directly
 - **Event Sourcing**: Track all changes for audit and replay
 
-### 3. Microservices Patterns
-- **API Gateway**: Single entry point for all clients
-- **Service Discovery**: Dynamic service location
-- **Circuit Breaker**: Fault tolerance and resilience
-- **Saga Pattern**: Distributed transaction management
+### 3. Database per Service Pattern
+- **Data Ownership**: Each service owns its database/schema
+- **Data Independence**: Services can't access other services' data directly
+- **Eventual Consistency**: Data consistency through events
+
+## 🗄️ Database Architecture
+
+### Service-Specific Databases
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Auth Service  │    │   User Service  │    │   Post Service  │
+│                 │    │                 │    │                 │
+│ ┌─────────────┐ │    │ ┌─────────────┐ │    │ ┌─────────────┐ │
+│ │ Auth DB     │ │    │ │ User DB     │ │    │ │ Post DB     │ │
+│ │ - sessions  │ │    │ │ - users     │ │    │ │ - posts     │ │
+│ │ - tokens    │ │    │ │ - profiles  │ │    │ │ - comments  │ │
+│ │ - passwords │ │    │ │ - friends   │ │    │ │ - reactions │ │
+│ └─────────────┘ │    │ └─────────────┘ │    │ └─────────────┘ │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│Message Service  │    │ Media Service   │    │ Search Service  │
+│                 │    │                 │    │                 │
+│ ┌─────────────┐ │    │ ┌─────────────┐ │    │ ┌─────────────┐ │
+│ │ Message DB  │ │    │ │ Media DB    │ │    │ │ Elasticsearch│ │
+│ │ - messages  │ │    │ │ - files     │ │    │ │ - search    │ │
+│ │ - convos    │ │    │ │ - metadata  │ │    │ │ - indices   │ │
+│ └─────────────┘ │    │ └─────────────┘ │    │ └─────────────┘ │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+### Shared Infrastructure
+- **Redis**: Shared cache and session store
+- **RabbitMQ**: Event bus for service communication
+- **Elasticsearch**: Shared search index
+
+## 🔄 Service Communication
+
+### Event-Driven Communication (Recommended)
+```
+User Service ──► Post Created Event ──► RabbitMQ ──► Search Service
+     │                                        │
+     │                                        ▼
+     └───► User Updated Event ──► RabbitMQ ──► Notification Service
+```
+
+### No Direct Service-to-Service Calls
+❌ **Wrong**: `POST /api/users/{id}/posts` (User service calling Post service)  
+✅ **Correct**: User service publishes "User Created Post" event, Post service listens
 
 ## 🚀 Core Features
 
@@ -89,7 +141,7 @@ A comprehensive backend system for a mini social media platform similar to Faceb
 |----------|------------|---------|
 | **Language** | TypeScript | Type-safe backend development |
 | **Framework** | Node.js/Express | Web server and API |
-| **Database** | PostgreSQL | Primary data storage |
+| **Database** | PostgreSQL | Primary data storage (multiple instances) |
 | **Cache** | Redis | Session, caching, pub/sub |
 | **Search** | Elasticsearch | Full-text search |
 | **Message Queue** | RabbitMQ | Event-driven communication |
@@ -148,10 +200,32 @@ be-mini-social-media/
 │   ├── shared/             # Shared utilities
 │   ├── services/           # Microservices
 │   │   ├── auth-service/
+│   │   │   ├── src/
+│   │   │   ├── database/   # Auth service database
+│   │   │   └── Dockerfile
 │   │   ├── user-service/
+│   │   │   ├── src/
+│   │   │   ├── database/   # User service database
+│   │   │   └── Dockerfile
 │   │   ├── post-service/
+│   │   │   ├── src/
+│   │   │   ├── database/   # Post service database
+│   │   │   └── Dockerfile
 │   │   ├── message-service/
-│   │   └── search-service/
+│   │   │   ├── src/
+│   │   │   ├── database/   # Message service database
+│   │   │   └── Dockerfile
+│   │   ├── media-service/
+│   │   │   ├── src/
+│   │   │   ├── database/   # Media service database
+│   │   │   └── Dockerfile
+│   │   ├── search-service/
+│   │   │   ├── src/
+│   │   │   └── Dockerfile
+│   │   └── notification-service/
+│   │       ├── src/
+│   │       ├── database/   # Notification service database
+│   │       └── Dockerfile
 │   ├── gateway/            # API Gateway
 │   └── infrastructure/     # Infrastructure code
 ├── docker/                 # Docker configurations
@@ -165,6 +239,7 @@ By the end of this project, you will have hands-on experience with:
 - Modern backend architecture patterns
 - Microservices design and implementation
 - Event-driven systems
+- Database per service pattern
 - Container orchestration
 - Database design and optimization
 - API design and documentation
