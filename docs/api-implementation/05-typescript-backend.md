@@ -2,9 +2,9 @@
 
 ## 🎯 Overview
 
-TypeScript is our primary programming language for the backend development. It provides static typing, better IDE support, and helps catch errors at compile time, making our codebase more maintainable and scalable.
+TypeScript is our primary programming language for the backend development. It provides static typing, better IDE support, and helps catch errors at compile time, making our microservices architecture more maintainable and scalable.
 
-## 🏗️ Project Structure
+## 🏗️ Microservices Project Structure
 
 ```
 src/
@@ -13,21 +13,50 @@ src/
 │   ├── utils/             # Utility functions
 │   ├── constants/         # Application constants
 │   ├── validators/        # Input validation schemas
-│   └── middleware/        # Express middleware
-├── services/              # Microservices
-│   ├── auth-service/
-│   ├── user-service/
-│   ├── post-service/
-│   ├── message-service/
-│   ├── media-service/
-│   ├── search-service/
-│   └── notification-service/
-├── gateway/               # API Gateway
+│   ├── middleware/        # Express middleware
+│   └── events/            # Event types and schemas
+├── services/              # Microservices (Database per Service)
+│   ├── auth-service/      # Port 3100
+│   │   ├── src/
+│   │   ├── database/      # auth_service_db
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   ├── user-service/      # Port 3200
+│   │   ├── src/
+│   │   ├── database/      # user_service_db
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   ├── post-service/      # Port 3300
+│   │   ├── src/
+│   │   ├── database/      # post_service_db
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   ├── message-service/   # Port 3400
+│   │   ├── src/
+│   │   ├── database/      # message_service_db
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   ├── media-service/     # Port 3500
+│   │   ├── src/
+│   │   ├── database/      # media_service_db
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   ├── search-service/    # Port 3600
+│   │   ├── src/
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   └── notification-service/ # Port 3700
+│       ├── src/
+│       ├── database/      # notification_service_db
+│       ├── Dockerfile
+│       └── package.json
+├── gateway/               # API Gateway (Port 3000)
 ├── infrastructure/        # Infrastructure code
-│   ├── database/         # Database connections
+│   ├── databases/        # Multiple database connections
 │   ├── redis/            # Redis client
 │   ├── elasticsearch/    # Elasticsearch client
-│   └── rabbitmq/         # Message broker
+│   ├── rabbitmq/         # Message broker
+│   └── websocket/        # WebSocket server
 └── tests/                # Test files
 ```
 
@@ -278,6 +307,9 @@ export interface AuthService {
   logout(token: string): Promise<void>;
   refreshToken(refreshToken: string): Promise<AuthResponse>;
   validateToken(token: string): Promise<UserPayload>;
+  forgotPassword(email: string): Promise<void>;
+  resetPassword(token: string, newPassword: string): Promise<void>;
+  verifyEmail(token: string): Promise<void>;
 }
 
 export interface UserService {
@@ -286,7 +318,10 @@ export interface UserService {
   updateProfile(userId: string, updates: UpdateProfileRequest): Promise<User>;
   searchUsers(query: string, filters: SearchFilters): Promise<PaginatedResponse<User>>;
   sendFriendRequest(fromUserId: string, toUserId: string): Promise<Friendship>;
+  acceptFriendRequest(friendshipId: string, userId: string): Promise<Friendship>;
   getFriends(userId: string, pagination: PaginationParams): Promise<PaginatedResponse<User>>;
+  removeFriend(friendshipId: string, userId: string): Promise<void>;
+  updatePrivacySettings(userId: string, settings: PrivacySettings): Promise<PrivacySettings>;
 }
 
 export interface PostService {
@@ -297,20 +332,104 @@ export interface PostService {
   getFeed(userId: string, pagination: PaginationParams): Promise<PaginatedResponse<Post>>;
   addComment(postId: string, userId: string, comment: CreateCommentRequest): Promise<Comment>;
   addReaction(postId: string, userId: string, reactionType: string): Promise<Reaction>;
+  removeReaction(postId: string, userId: string, reactionType: string): Promise<void>;
+  getComments(postId: string, pagination: PaginationParams): Promise<PaginatedResponse<Comment>>;
 }
 
 export interface MessageService {
-  createConversation(participants: string[]): Promise<Conversation>;
+  createConversation(participants: string[], type: 'direct' | 'group'): Promise<Conversation>;
   getConversations(userId: string, pagination: PaginationParams): Promise<PaginatedResponse<Conversation>>;
   sendMessage(conversationId: string, senderId: string, message: SendMessageRequest): Promise<Message>;
   getMessages(conversationId: string, pagination: PaginationParams): Promise<PaginatedResponse<Message>>;
   markAsRead(messageId: string, userId: string): Promise<void>;
+  deleteMessage(messageId: string, userId: string): Promise<void>;
 }
+
+export interface MediaService {
+  uploadFile(userId: string, file: Express.Multer.File, type: string): Promise<MediaFile>;
+  uploadMultipleFiles(userId: string, files: Express.Multer.File[], type: string): Promise<MediaFile[]>;
+  getMedia(mediaId: string): Promise<MediaFile>;
+  getUserMedia(userId: string, filters: MediaFilters): Promise<PaginatedResponse<MediaFile>>;
+  deleteMedia(mediaId: string, userId: string): Promise<void>;
+}
+
+export interface SearchService {
+  searchPosts(query: string, filters: SearchFilters): Promise<PaginatedResponse<Post>>;
+  searchUsers(query: string, filters: SearchFilters): Promise<PaginatedResponse<User>>;
+  getSuggestions(query: string): Promise<string[]>;
+  getTrending(): Promise<TrendingItem[]>;
+}
+
+export interface NotificationService {
+  getNotifications(userId: string, filters: NotificationFilters): Promise<PaginatedResponse<Notification>>;
+  markAsRead(notificationId: string, userId: string): Promise<void>;
+  markAllAsRead(userId: string): Promise<number>;
+  updatePreferences(userId: string, preferences: NotificationPreferences): Promise<NotificationPreferences>;
+  getUnreadCount(userId: string): Promise<number>;
+}
+```
+
+### Event Types
+```typescript
+// shared/events/types.ts
+export interface EventBase {
+  eventId: string;
+  eventType: string;
+  timestamp: Date;
+  source: string;
+  version: string;
+}
+
+export interface UserRegisteredEvent extends EventBase {
+  eventType: 'user.registered';
+  data: {
+    userId: string;
+    email: string;
+    username: string;
+  };
+}
+
+export interface PostCreatedEvent extends EventBase {
+  eventType: 'post.created';
+  data: {
+    postId: string;
+    userId: string;
+    content: string;
+    privacyLevel: string;
+  };
+}
+
+export interface FriendRequestSentEvent extends EventBase {
+  eventType: 'friend.request.sent';
+  data: {
+    friendshipId: string;
+    fromUserId: string;
+    toUserId: string;
+  };
+}
+
+export interface MessageSentEvent extends EventBase {
+  eventType: 'message.sent';
+  data: {
+    messageId: string;
+    conversationId: string;
+    senderId: string;
+    receiverId: string;
+    content: string;
+  };
+}
+
+// Union type for all events
+export type DomainEvent = 
+  | UserRegisteredEvent
+  | PostCreatedEvent
+  | FriendRequestSentEvent
+  | MessageSentEvent;
 ```
 
 ## 🛠️ Express Application Setup
 
-### Main Application
+### API Gateway Application
 ```typescript
 // gateway/app.ts
 import express from 'express';
@@ -323,6 +442,7 @@ import dotenv from 'dotenv';
 import { errorHandler } from '@/shared/middleware/errorHandler';
 import { requestId } from '@/shared/middleware/requestId';
 import { rateLimiter } from '@/shared/middleware/rateLimiter';
+import { serviceProxy } from '@/shared/middleware/serviceProxy';
 import { authRoutes } from './routes/auth';
 import { userRoutes } from './routes/users';
 import { postRoutes } from './routes/posts';
@@ -355,18 +475,27 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    services: {
+      auth: process.env.AUTH_SERVICE_URL || 'http://localhost:3100',
+      user: process.env.USER_SERVICE_URL || 'http://localhost:3200',
+      post: process.env.POST_SERVICE_URL || 'http://localhost:3300',
+      message: process.env.MESSAGE_SERVICE_URL || 'http://localhost:3400',
+      media: process.env.MEDIA_SERVICE_URL || 'http://localhost:3500',
+      search: process.env.SEARCH_SERVICE_URL || 'http://localhost:3600',
+      notification: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3700'
+    }
   });
 });
 
-// API routes
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/users', userRoutes);
-app.use('/api/v1/posts', postRoutes);
-app.use('/api/v1/messages', messageRoutes);
-app.use('/api/v1/media', mediaRoutes);
-app.use('/api/v1/search', searchRoutes);
-app.use('/api/v1/notifications', notificationRoutes);
+// Service proxy middleware for routing to microservices
+app.use('/api/v1/auth', serviceProxy('auth-service'), authRoutes);
+app.use('/api/v1/users', serviceProxy('user-service'), userRoutes);
+app.use('/api/v1/posts', serviceProxy('post-service'), postRoutes);
+app.use('/api/v1/messages', serviceProxy('message-service'), messageRoutes);
+app.use('/api/v1/media', serviceProxy('media-service'), mediaRoutes);
+app.use('/api/v1/search', serviceProxy('search-service'), searchRoutes);
+app.use('/api/v1/notifications', serviceProxy('notification-service'), notificationRoutes);
 
 // Error handling
 app.use(errorHandler);
@@ -387,49 +516,171 @@ app.use('*', (req, res) => {
 export default app;
 ```
 
-### Server Entry Point
+### Individual Service Application
+```typescript
+// services/auth-service/src/app.ts
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import morgan from 'morgan';
+import dotenv from 'dotenv';
+
+import { errorHandler } from '@/shared/middleware/errorHandler';
+import { requestId } from '@/shared/middleware/requestId';
+import { rateLimiter } from '@/shared/middleware/rateLimiter';
+import { authRoutes } from './routes/auth';
+import { eventHandler } from './events/eventHandler';
+
+dotenv.config();
+
+const app = express();
+
+// Security middleware
+app.use(helmet());
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+  credentials: true
+}));
+
+// Request processing middleware
+app.use(compression());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(morgan('combined'));
+app.use(requestId);
+app.use(rateLimiter);
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'auth-service',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    database: 'auth_service_db'
+  });
+});
+
+// API routes
+app.use('/api/v1/auth', authRoutes);
+
+// Event handling
+app.use('/events', eventHandler);
+
+// Error handling
+app.use(errorHandler);
+
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: {
+      code: 'NOT_FOUND',
+      message: 'Route not found'
+    },
+    timestamp: new Date().toISOString(),
+    requestId: req.headers['x-request-id']
+  });
+});
+
+export default app;
+```
+
+### API Gateway Server Entry Point
 ```typescript
 // gateway/server.ts
 import app from './app';
+import { createServer } from 'http';
 import { logger } from '@/shared/utils/logger';
-import { connectDatabase } from '@/infrastructure/database/connection';
 import { connectRedis } from '@/infrastructure/redis/connection';
-import { connectElasticsearch } from '@/infrastructure/elasticsearch/connection';
-import { connectRabbitMQ } from '@/infrastructure/rabbitmq/connection';
+import { createSocketServer } from '@/infrastructure/websocket/socketServer';
 
 const PORT = process.env.PORT || 3000;
 
-async function startServer() {
+async function startGateway() {
   try {
-    // Connect to external services
-    await connectDatabase();
+    // Connect to shared services
     await connectRedis();
-    await connectElasticsearch();
-    await connectRabbitMQ();
+
+    // Create HTTP server
+    const httpServer = createServer(app);
+    
+    // Initialize WebSocket server
+    createSocketServer(httpServer);
 
     // Start server
-    app.listen(PORT, () => {
-      logger.info(`Server running on port ${PORT}`);
+    httpServer.listen(PORT, () => {
+      logger.info(`API Gateway running on port ${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV}`);
     });
   } catch (error) {
-    logger.error('Failed to start server:', error);
+    logger.error('Failed to start API Gateway:', error);
     process.exit(1);
   }
 }
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  logger.info('SIGTERM received. Shutting down gracefully...');
+  logger.info('SIGTERM received. Shutting down API Gateway gracefully...');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  logger.info('SIGINT received. Shutting down gracefully...');
+  logger.info('SIGINT received. Shutting down API Gateway gracefully...');
   process.exit(0);
 });
 
-startServer();
+startGateway();
+```
+
+### Individual Service Server Entry Point
+```typescript
+// services/auth-service/src/server.ts
+import app from './app';
+import { logger } from '@/shared/utils/logger';
+import { connectDatabase } from '@/infrastructure/databases/authDatabase';
+import { connectRedis } from '@/infrastructure/redis/connection';
+import { connectRabbitMQ } from '@/infrastructure/rabbitmq/connection';
+import { startEventConsumer } from './events/eventConsumer';
+
+const PORT = process.env.PORT || 3100;
+const SERVICE_NAME = 'auth-service';
+
+async function startAuthService() {
+  try {
+    // Connect to external services
+    await connectDatabase();
+    await connectRedis();
+    await connectRabbitMQ();
+
+    // Start event consumer
+    await startEventConsumer();
+
+    // Start server
+    app.listen(PORT, () => {
+      logger.info(`${SERVICE_NAME} running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV}`);
+      logger.info(`Database: auth_service_db`);
+    });
+  } catch (error) {
+    logger.error(`Failed to start ${SERVICE_NAME}:`, error);
+    process.exit(1);
+  }
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info(`SIGTERM received. Shutting down ${SERVICE_NAME} gracefully...`);
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  logger.info(`SIGINT received. Shutting down ${SERVICE_NAME} gracefully...`);
+  process.exit(0);
+});
+
+startAuthService();
 ```
 
 ## 🔧 Middleware Examples
@@ -661,16 +912,23 @@ npm run check  # (combines lint, type-check, and test)
 ```
 
 ### Environment Variables
+
+#### API Gateway (.env)
 ```bash
-# .env.example
+# API Gateway Configuration
 NODE_ENV=development
 PORT=3000
 
-# Database
-DATABASE_URL=postgresql://username:password@localhost:5432/minifacebook
-DB_POOL_SIZE=10
+# Service URLs
+AUTH_SERVICE_URL=http://localhost:3100
+USER_SERVICE_URL=http://localhost:3200
+POST_SERVICE_URL=http://localhost:3300
+MESSAGE_SERVICE_URL=http://localhost:3400
+MEDIA_SERVICE_URL=http://localhost:3500
+SEARCH_SERVICE_URL=http://localhost:3600
+NOTIFICATION_SERVICE_URL=http://localhost:3700
 
-# Redis
+# Shared Services
 REDIS_URL=redis://localhost:6379
 REDIS_PASSWORD=
 
@@ -680,10 +938,159 @@ JWT_EXPIRES_IN=1h
 REFRESH_TOKEN_SECRET=your-refresh-token-secret
 REFRESH_TOKEN_EXPIRES_IN=30d
 
+# CORS
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+```
+
+#### Auth Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3100
+SERVICE_NAME=auth-service
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost:5432/auth_service_db
+DB_POOL_SIZE=5
+
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+RABBITMQ_URL=amqp://localhost:5672
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
+JWT_EXPIRES_IN=1h
+REFRESH_TOKEN_SECRET=your-refresh-token-secret
+REFRESH_TOKEN_EXPIRES_IN=30d
+
+# Email
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-app-password
+```
+
+#### User Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3200
+SERVICE_NAME=user-service
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost:5432/user_service_db
+DB_POOL_SIZE=5
+
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+RABBITMQ_URL=amqp://localhost:5672
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
+```
+
+#### Post Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3300
+SERVICE_NAME=post-service
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost:5432/post_service_db
+DB_POOL_SIZE=5
+
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+RABBITMQ_URL=amqp://localhost:5672
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
+```
+
+#### Message Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3400
+SERVICE_NAME=message-service
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost:5432/message_service_db
+DB_POOL_SIZE=5
+
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+RABBITMQ_URL=amqp://localhost:5672
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
+```
+
+#### Media Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3500
+SERVICE_NAME=media-service
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost:5432/media_service_db
+DB_POOL_SIZE=5
+
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+RABBITMQ_URL=amqp://localhost:5672
+
+# File Upload
+MAX_FILE_SIZE=10485760
+ALLOWED_FILE_TYPES=image/jpeg,image/png,image/gif,video/mp4
+UPLOAD_PATH=./uploads
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
+```
+
+#### Search Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3600
+SERVICE_NAME=search-service
+
 # Elasticsearch
 ELASTICSEARCH_URL=http://localhost:9200
+ELASTICSEARCH_USERNAME=
+ELASTICSEARCH_PASSWORD=
 
-# RabbitMQ
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+RABBITMQ_URL=amqp://localhost:5672
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
+```
+
+#### Notification Service (.env)
+```bash
+# Service Configuration
+NODE_ENV=development
+PORT=3700
+SERVICE_NAME=notification-service
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost:5432/notification_service_db
+DB_POOL_SIZE=5
+
+# Shared Services
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
 RABBITMQ_URL=amqp://localhost:5672
 
 # Email
@@ -692,12 +1099,11 @@ SMTP_PORT=587
 SMTP_USER=your-email@gmail.com
 SMTP_PASS=your-app-password
 
-# File Upload
-MAX_FILE_SIZE=10485760
-ALLOWED_FILE_TYPES=image/jpeg,image/png,image/gif,video/mp4
+# Push Notifications
+FCM_SERVER_KEY=your-fcm-server-key
 
-# CORS
-ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+# JWT
+JWT_SECRET=your-super-secret-jwt-key
 ```
 
 ## 🎯 Best Practices
