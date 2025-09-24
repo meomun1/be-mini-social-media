@@ -185,6 +185,60 @@ Verify user email address.
 }
 ```
 
+### POST /auth/validate
+Validate JWT token (Internal API for cross-service authentication).
+
+**Headers:** `Authorization: Bearer <service_token>`
+
+**Request Body:**
+```json
+{
+  "token": "user-jwt-token"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": "uuid-123",
+      "email": "user@example.com",
+      "username": "johndoe",
+      "role": "user"
+    },
+    "valid": true,
+    "expiresAt": "2024-01-15T11:30:00Z"
+  }
+}
+```
+
+### GET /auth/users/{userId}
+Get user information by ID (Internal API for cross-service calls).
+
+**Headers:** `Authorization: Bearer <service_token>`
+
+**Path Parameters:**
+- `userId` (string): User ID
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "uuid-123",
+    "email": "user@example.com",
+    "username": "johndoe",
+    "firstName": "John",
+    "lastName": "Doe",
+    "role": "user",
+    "isVerified": true,
+    "isActive": true
+  }
+}
+```
+
 ## 👤 User Service API (Port 3200)
 
 **Database**: `user_service_db`  
