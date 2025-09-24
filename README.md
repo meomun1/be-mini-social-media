@@ -35,13 +35,34 @@ This project demonstrates a full-stack backend development approach using TypeSc
               ┌──────────────┐                ┌──────────────┐                ┌──────────────┐
               │   Auth       │                │   Posts      │                │   Messages   │
               │   Service    │                │   Service    │                │   Service    │
+              │   (Port 3100)│                │   (Port 3300)│                │   (Port 3400)│
               └──────────────┘                └──────────────┘                └──────────────┘
                        │                                 │                                 │
               ┌──────────────┐                ┌──────────────┐                ┌──────────────┐
               │   Users      │                │   Media      │                │   Search     │
               │   Service    │                │   Service    │                │   Service    │
+              │   (Port 3200)│                │   (Port 3500)│                │   (Port 3600)│
               └──────────────┘                └──────────────┘                └──────────────┘
+                       │                                 │                                 │
+              ┌──────────────┐                ┌──────────────┐                ┌──────────────┐
+              │ Notification │                │   RabbitMQ   │                │  Elasticsearch│
+              │   Service    │                │  Event Bus   │                │   Search     │
+              │   (Port 3700)│                │   (Port 5672)│                │   (Port 9200)│
+              └──────────────┘                └──────────────┘                └──────────────┘
+                       │                                 │                                 │
+                       └─────────────────────────────────┼─────────────────────────────────┘
+                                                         ▼
+                                    ┌─────────────────────────────────┐
+                                    │        Data Layer               │
+                                    │  Multiple Databases + Redis    │
+                                    └─────────────────────────────────┘
 ```
+
+### Microservices Architecture
+- **Database per Service**: Each service owns its database
+- **Event-Driven Communication**: Services communicate through RabbitMQ events
+- **Loose Coupling**: No direct service-to-service calls
+- **Independent Deployment**: Each service can be deployed separately
 
 ## 📁 Project Structure
 
@@ -67,14 +88,34 @@ be-mini-social-media/
 │   └── 16-cicd-deployment.md      # CI/CD pipeline
 ├── src/
 │   ├── shared/                    # Shared utilities and types
-│   ├── services/                  # Microservices
+│   ├── services/                  # Microservices (Database per Service)
 │   │   ├── auth-service/
+│   │   │   ├── src/
+│   │   │   ├── database/          # Auth service database
+│   │   │   └── Dockerfile
 │   │   ├── user-service/
+│   │   │   ├── src/
+│   │   │   ├── database/          # User service database
+│   │   │   └── Dockerfile
 │   │   ├── post-service/
+│   │   │   ├── src/
+│   │   │   ├── database/          # Post service database
+│   │   │   └── Dockerfile
 │   │   ├── message-service/
+│   │   │   ├── src/
+│   │   │   ├── database/          # Message service database
+│   │   │   └── Dockerfile
 │   │   ├── media-service/
+│   │   │   ├── src/
+│   │   │   ├── database/          # Media service database
+│   │   │   └── Dockerfile
 │   │   ├── search-service/
+│   │   │   ├── src/
+│   │   │   └── Dockerfile
 │   │   └── notification-service/
+│   │       ├── src/
+│   │       ├── database/          # Notification service database
+│   │       └── Dockerfile
 │   ├── gateway/                   # API Gateway
 │   └── infrastructure/            # Infrastructure code
 ├── docker/                        # Docker configurations
@@ -92,8 +133,9 @@ be-mini-social-media/
 - **Analytics**: User engagement, system monitoring
 
 ### Technical Features
-- **Microservices Architecture**: Scalable, maintainable service design
-- **Event-Driven Communication**: Asynchronous service communication
+- **Microservices Architecture**: Database per service, loose coupling
+- **Event-Driven Communication**: RabbitMQ for async service communication
+- **Database per Service**: Each service owns its PostgreSQL database
 - **Caching Strategy**: Multi-layer caching with Redis
 - **Search Engine**: Full-text search with Elasticsearch
 - **Real-time Updates**: WebSocket-based live features
@@ -106,30 +148,30 @@ be-mini-social-media/
 
 Each technology and component has comprehensive documentation:
 
-1. **[System Overview](docs/00-system-overview.md)** - High-level architecture and design principles
-2. **[Core Features](docs/01-core-features.md)** - Detailed feature specifications
-3. **[Database Design](docs/02-database-design.md)** - PostgreSQL schema and optimization
-4. **[Microservices](docs/03-microservices-architecture.md)** - Service boundaries and communication
-5. **[API Specifications](docs/04-api-specifications.md)** - REST API documentation
-6. **[TypeScript Backend](docs/05-typescript-backend.md)** - Development setup and patterns
-7. **[PostgreSQL](docs/06-postgresql-database.md)** - Database implementation and queries
-8. **[Redis Caching](docs/07-redis-caching.md)** - Caching strategies and session management
-9. **[Elasticsearch](docs/08-elasticsearch-search.md)** - Search implementation and indexing
-10. **[RabbitMQ](docs/09-rabbitmq-messaging.md)** - Event-driven messaging
-11. **[WebSockets](docs/10-websocket-realtime.md)** - Real-time communication
-12. **[JWT Authentication](docs/11-jwt-authentication.md)** - Security and authentication
-13. **[Nginx](docs/12-nginx-load-balancer.md)** - Load balancing and reverse proxy
-14. **[Docker](docs/13-docker-containerization.md)** - Containerization setup
-15. **[Kubernetes](docs/14-kubernetes-orchestration.md)** - Container orchestration
-16. **[Jest Testing](docs/15-jest-testing.md)** - Testing framework and strategies
-17. **[CI/CD](docs/16-cicd-deployment.md)** - Deployment pipeline and automation
+1. **[System Overview](docs/system-design/00-system-overview.md)** - High-level architecture and design principles
+2. **[Core Features](docs/system-design/01-core-features.md)** - Detailed feature specifications
+3. **[Database Design](docs/system-design/02-database-design.md)** - Database per service schema
+4. **[Microservices](docs/system-design/03-microservices-architecture.md)** - Service boundaries and event communication
+5. **[API Specifications](docs/api-implementation/04-api-specifications.md)** - REST API documentation
+6. **[TypeScript Backend](docs/api-implementation/05-typescript-backend.md)** - Development setup and patterns
+7. **[PostgreSQL](docs/infrastructure/06-postgresql-database.md)** - Database implementation and queries
+8. **[Redis Caching](docs/infrastructure/07-redis-caching.md)** - Caching strategies and session management
+9. **[Elasticsearch](docs/infrastructure/08-elasticsearch-search.md)** - Search implementation and indexing
+10. **[RabbitMQ](docs/infrastructure/09-rabbitmq-messaging.md)** - Event-driven messaging
+11. **[WebSockets](docs/infrastructure/10-websocket-realtime.md)** - Real-time communication
+12. **[JWT Authentication](docs/security/11-jwt-authentication.md)** - Security and authentication
+13. **[Nginx](docs/infrastructure/12-nginx-load-balancer.md)** - Load balancing and reverse proxy
+14. **[Docker](docs/devops/13-docker-containerization.md)** - Containerization setup
+15. **[Kubernetes](docs/devops/14-kubernetes-orchestration.md)** - Container orchestration
+16. **[Jest Testing](docs/testing/15-jest-testing.md)** - Testing framework and strategies
+17. **[CI/CD](docs/devops/16-cicd-deployment.md)** - Deployment pipeline and automation
 
 ## 🛠️ Development Setup
 
 ### Prerequisites
 - Node.js 18+
 - Docker & Docker Compose
-- PostgreSQL 15+
+- PostgreSQL 15+ (Multiple instances - one per service)
 - Redis 7+
 - Elasticsearch 8+
 - RabbitMQ 3+
@@ -146,8 +188,13 @@ npm install
 # Start development environment
 docker-compose -f docker-compose.dev.yml up -d
 
-# Run migrations
-npm run migrate
+# Run migrations for each service
+npm run migrate:auth
+npm run migrate:user
+npm run migrate:post
+npm run migrate:message
+npm run migrate:media
+npm run migrate:notification
 
 # Start development server
 npm run dev
@@ -177,8 +224,10 @@ docker-compose -f docker-compose.prod.yml build
 
 This project demonstrates:
 
-- **Modern Backend Architecture**: Microservices, event-driven design
-- **Database Design**: Relational modeling, indexing, optimization
+- **Modern Backend Architecture**: Microservices with database per service
+- **Event-Driven Design**: Asynchronous communication through events
+- **Database Design**: Multiple PostgreSQL instances, relational modeling
+- **Service Boundaries**: Clear domain separation and data ownership
 - **Caching Strategies**: Multi-layer caching, session management
 - **Search Implementation**: Full-text search, indexing, analytics
 - **Real-time Features**: WebSockets, live updates, notifications
@@ -194,10 +243,11 @@ All technologies in the stack are compatible and work together seamlessly:
 
 ✅ **No Conflicts**: All technologies complement each other  
 ✅ **Production Ready**: Industry-standard tools and practices  
-✅ **Scalable**: Designed for horizontal scaling  
-✅ **Maintainable**: Clear separation of concerns  
+✅ **Scalable**: Database per service enables independent scaling  
+✅ **Maintainable**: Clear service boundaries and data ownership  
 ✅ **Testable**: Comprehensive testing strategies  
 ✅ **Secure**: Multiple layers of security  
+✅ **Resilient**: Event-driven architecture with loose coupling  
 
 ## 🚀 Deployment
 
@@ -260,7 +310,7 @@ The system can be deployed using either self-managed infrastructure or AWS manag
 2. **AWS Hybrid**: Mix of self-managed and AWS services
 3. **AWS Full**: All managed services for production
 
-See [AWS Cloud Integration](docs/17-aws-cloud-integration.md) for detailed AWS setup and migration strategies.
+See [AWS Cloud Integration](docs/cloud/17-aws-cloud-integration.md) for detailed AWS setup and migration strategies.
 
 ---
 
