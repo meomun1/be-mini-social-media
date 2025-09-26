@@ -73,9 +73,11 @@ Our mini Facebook backend follows a **Domain-Driven Design (DDD)** approach with
 - Multi-factor authentication (future)
 
 **Database Tables**:
-- `auth.sessions` - User sessions and tokens
-- `auth.password_resets` - Password reset tokens
-- `auth.email_verifications` - Email verification tokens
+- `users` - User authentication data
+- `sessions` - User sessions and tokens
+- `refresh_tokens` - Refresh token management
+- `password_resets` - Password reset tokens
+- `email_verifications` - Email verification tokens
 
 **API Endpoints**:
 ```
@@ -106,9 +108,9 @@ POST   /auth/verify-email
 - Account management and deactivation
 
 **Database Tables**:
-- `user_service.users` - User profiles
-- `user_service.privacy_settings` - Privacy configurations
-- `user_service.friendships` - Friend relationships
+- `users` - User profiles
+- `privacy_settings` - Privacy configurations
+- `friendships` - Friend relationships
 
 **API Endpoints**:
 ```
@@ -145,9 +147,9 @@ GET    /users/friends
 - Content privacy and audience management
 
 **Database Tables**:
-- `post_service.posts` - Posts and content
-- `post_service.comments` - Comments on posts
-- `post_service.reactions` - User reactions to posts/comments
+- `posts` - Posts and content
+- `comments` - Comments on posts
+- `reactions` - User reactions to posts/comments
 
 **API Endpoints**:
 ```
@@ -186,9 +188,9 @@ DELETE /posts/{id}/reactions
 - Conversation management
 
 **Database Tables**:
-- `message_service.conversations` - Chat conversations
-- `message_service.conversation_participants` - Who's in each conversation
-- `message_service.messages` - Individual messages
+- `conversations` - Chat conversations
+- `conversation_participants` - Who's in each conversation
+- `messages` - Individual messages
 
 **API Endpoints**:
 ```
@@ -230,8 +232,8 @@ user.offline
 - Media metadata management
 
 **Database Tables**:
-- `media_service.media_files` - File information
-- `media_service.media_metadata` - Additional metadata
+- `media_files` - File information
+- `media_metadata` - Additional metadata
 
 **API Endpoints**:
 ```
@@ -293,8 +295,8 @@ POST   /search/analytics
 - Notification history and analytics
 
 **Database Tables**:
-- `notification_service.notifications` - Notification records
-- `notification_service.notification_preferences` - User preferences
+- `notifications` - Notification records
+- `notification_preferences` - User preferences
 
 **API Endpoints**:
 ```
@@ -395,11 +397,11 @@ const post = {
 ### ✅ Database per Service
 ```sql
 -- DO: Each service has its own database
--- Post Service Database
-CREATE TABLE post_service.posts (...);
+-- Post Service Database (post_service_db)
+CREATE TABLE posts (...);
 
--- User Service Database  
-CREATE TABLE user_service.users (...);
+-- User Service Database (user_service_db)
+CREATE TABLE users (...);
 ```
 
 ## 🔒 Security Architecture

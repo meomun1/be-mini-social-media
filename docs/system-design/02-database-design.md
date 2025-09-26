@@ -11,12 +11,25 @@ In a proper microservices architecture, each service owns its database. This ens
 -- auth_service_db
 -- Purpose: Authentication, authorization, sessions
 
-CREATE SCHEMA auth;
+-- Create database
+CREATE DATABASE auth_service_db;
+\c auth_service_db;
+
+-- Users table (minimal for authentication)
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
 -- Sessions table
-CREATE TABLE auth.sessions (
+CREATE TABLE sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id VARCHAR(255) NOT NULL, -- Reference to user service
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     access_token_hash VARCHAR(255) NOT NULL,
     refresh_token_hash VARCHAR(255) NOT NULL,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -24,10 +37,20 @@ CREATE TABLE auth.sessions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Password resets
-CREATE TABLE auth.password_resets (
+-- Refresh tokens table
+CREATE TABLE refresh_tokens (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    is_revoked BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Password resets
+CREATE TABLE password_resets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash VARCHAR(255) NOT NULL,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used_at TIMESTAMP WITH TIME ZONE,
@@ -35,9 +58,9 @@ CREATE TABLE auth.password_resets (
 );
 
 -- Email verifications
-CREATE TABLE auth.email_verifications (
+CREATE TABLE email_verifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -46,10 +69,13 @@ CREATE TABLE auth.email_verifications (
 );
 
 -- Indexes
-CREATE INDEX idx_sessions_user_id ON auth.sessions(user_id);
-CREATE INDEX idx_sessions_expires_at ON auth.sessions(expires_at);
-CREATE INDEX idx_password_resets_token ON auth.password_resets(token_hash);
-CREATE INDEX idx_email_verifications_token ON auth.email_verifications(token_hash);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE INDEX idx_password_resets_token ON password_resets(token_hash);
+CREATE INDEX idx_email_verifications_token ON email_verifications(token_hash);
 ```
 
 ### 2. User Service Database
@@ -57,10 +83,12 @@ CREATE INDEX idx_email_verifications_token ON auth.email_verifications(token_has
 -- user_service_db
 -- Purpose: User profiles, friendships, privacy settings
 
-CREATE SCHEMA user_service;
+-- Create database
+CREATE DATABASE user_service_db;
+\c user_service_db;
 
 -- Users table
-CREATE TABLE user_service.users (
+CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(50) UNIQUE NOT NULL,
@@ -82,8 +110,8 @@ CREATE TABLE user_service.users (
 );
 
 -- Privacy settings
-CREATE TABLE user_service.privacy_settings (
-    user_id UUID PRIMARY KEY REFERENCES user_service.users(id) ON DELETE CASCADE,
+CREATE TABLE privacy_settings (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     profile_visibility VARCHAR(20) DEFAULT 'friends' CHECK (profile_visibility IN ('public', 'friends', 'private')),
     email_visibility VARCHAR(20) DEFAULT 'friends' CHECK (email_visibility IN ('public', 'friends', 'private')),
     phone_visibility VARCHAR(20) DEFAULT 'private' CHECK (phone_visibility IN ('public', 'friends', 'private')),
@@ -92,10 +120,10 @@ CREATE TABLE user_service.privacy_settings (
 );
 
 -- Friendships
-CREATE TABLE user_service.friendships (
+CREATE TABLE friendships (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user1_id UUID NOT NULL REFERENCES user_service.users(id) ON DELETE CASCADE,
-    user2_id UUID NOT NULL REFERENCES user_service.users(id) ON DELETE CASCADE,
+    user1_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user2_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(20) NOT NULL CHECK (status IN ('pending', 'accepted', 'blocked')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -104,12 +132,12 @@ CREATE TABLE user_service.friendships (
 );
 
 -- Indexes
-CREATE INDEX idx_users_email ON user_service.users(email);
-CREATE INDEX idx_users_username ON user_service.users(username);
-CREATE INDEX idx_users_created_at ON user_service.users(created_at DESC);
-CREATE INDEX idx_friendships_user1_id ON user_service.friendships(user1_id);
-CREATE INDEX idx_friendships_user2_id ON user_service.friendships(user2_id);
-CREATE INDEX idx_friendships_status ON user_service.friendships(status);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_created_at ON users(created_at DESC);
+CREATE INDEX idx_friendships_user1_id ON friendships(user1_id);
+CREATE INDEX idx_friendships_user2_id ON friendships(user2_id);
+CREATE INDEX idx_friendships_status ON friendships(status);
 ```
 
 ### 3. Post Service Database
@@ -117,10 +145,12 @@ CREATE INDEX idx_friendships_status ON user_service.friendships(status);
 -- post_service_db
 -- Purpose: Posts, comments, reactions
 
-CREATE SCHEMA post_service;
+-- Create database
+CREATE DATABASE post_service_db;
+\c post_service_db;
 
 -- Posts table
-CREATE TABLE post_service.posts (
+CREATE TABLE posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL, -- Reference to user service
     content TEXT NOT NULL,
@@ -138,11 +168,11 @@ CREATE TABLE post_service.posts (
 );
 
 -- Comments
-CREATE TABLE post_service.comments (
+CREATE TABLE comments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    post_id UUID NOT NULL REFERENCES post_service.posts(id) ON DELETE CASCADE,
+    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
     user_id VARCHAR(255) NOT NULL, -- Reference to user service
-    parent_comment_id UUID REFERENCES post_service.comments(id) ON DELETE CASCADE,
+    parent_comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     like_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -151,11 +181,11 @@ CREATE TABLE post_service.comments (
 );
 
 -- Reactions
-CREATE TABLE post_service.reactions (
+CREATE TABLE reactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL, -- Reference to user service
-    post_id UUID REFERENCES post_service.posts(id) ON DELETE CASCADE,
-    comment_id UUID REFERENCES post_service.comments(id) ON DELETE CASCADE,
+    post_id UUID REFERENCES posts(id) ON DELETE CASCADE,
+    comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
     type VARCHAR(20) NOT NULL CHECK (type IN ('like', 'love', 'laugh', 'angry', 'sad')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     CONSTRAINT reactions_target_check CHECK (
@@ -167,14 +197,14 @@ CREATE TABLE post_service.reactions (
 );
 
 -- Indexes
-CREATE INDEX idx_posts_user_id ON post_service.posts(user_id);
-CREATE INDEX idx_posts_created_at ON post_service.posts(created_at DESC);
-CREATE INDEX idx_posts_privacy_level ON post_service.posts(privacy_level);
-CREATE INDEX idx_comments_post_id ON post_service.comments(post_id);
-CREATE INDEX idx_comments_user_id ON post_service.comments(user_id);
-CREATE INDEX idx_reactions_user_id ON post_service.reactions(user_id);
-CREATE INDEX idx_reactions_post_id ON post_service.reactions(post_id);
-CREATE INDEX idx_reactions_comment_id ON post_service.reactions(comment_id);
+CREATE INDEX idx_posts_user_id ON posts(user_id);
+CREATE INDEX idx_posts_created_at ON posts(created_at DESC);
+CREATE INDEX idx_posts_privacy_level ON posts(privacy_level);
+CREATE INDEX idx_comments_post_id ON comments(post_id);
+CREATE INDEX idx_comments_user_id ON comments(user_id);
+CREATE INDEX idx_reactions_user_id ON reactions(user_id);
+CREATE INDEX idx_reactions_post_id ON reactions(post_id);
+CREATE INDEX idx_reactions_comment_id ON reactions(comment_id);
 ```
 
 ### 4. Message Service Database
@@ -182,10 +212,12 @@ CREATE INDEX idx_reactions_comment_id ON post_service.reactions(comment_id);
 -- message_service_db
 -- Purpose: Direct messages, conversations
 
-CREATE SCHEMA message_service;
+-- Create database
+CREATE DATABASE message_service_db;
+\c message_service_db;
 
 -- Conversations
-CREATE TABLE message_service.conversations (
+CREATE TABLE conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     type VARCHAR(20) DEFAULT 'direct' CHECK (type IN ('direct', 'group')),
     name VARCHAR(255), -- For group conversations
@@ -195,9 +227,9 @@ CREATE TABLE message_service.conversations (
 );
 
 -- Conversation participants
-CREATE TABLE message_service.conversation_participants (
+CREATE TABLE conversation_participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    conversation_id UUID NOT NULL REFERENCES message_service.conversations(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     user_id VARCHAR(255) NOT NULL, -- Reference to user service
     role VARCHAR(20) DEFAULT 'member' CHECK (role IN ('admin', 'moderator', 'member')),
     joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -206,9 +238,9 @@ CREATE TABLE message_service.conversation_participants (
 );
 
 -- Messages
-CREATE TABLE message_service.messages (
+CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    conversation_id UUID NOT NULL REFERENCES message_service.conversations(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     sender_id VARCHAR(255) NOT NULL, -- Reference to user service
     content TEXT NOT NULL,
     message_type VARCHAR(20) DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'video', 'file')),
@@ -219,12 +251,12 @@ CREATE TABLE message_service.messages (
 );
 
 -- Indexes
-CREATE INDEX idx_conversations_created_by ON message_service.conversations(created_by);
-CREATE INDEX idx_conversation_participants_conversation_id ON message_service.conversation_participants(conversation_id);
-CREATE INDEX idx_conversation_participants_user_id ON message_service.conversation_participants(user_id);
-CREATE INDEX idx_messages_conversation_id ON message_service.messages(conversation_id);
-CREATE INDEX idx_messages_sender_id ON message_service.messages(sender_id);
-CREATE INDEX idx_messages_created_at ON message_service.messages(created_at DESC);
+CREATE INDEX idx_conversations_created_by ON conversations(created_by);
+CREATE INDEX idx_conversation_participants_conversation_id ON conversation_participants(conversation_id);
+CREATE INDEX idx_conversation_participants_user_id ON conversation_participants(user_id);
+CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX idx_messages_sender_id ON messages(sender_id);
+CREATE INDEX idx_messages_created_at ON messages(created_at DESC);
 ```
 
 ### 5. Media Service Database
@@ -232,10 +264,12 @@ CREATE INDEX idx_messages_created_at ON message_service.messages(created_at DESC
 -- media_service_db
 -- Purpose: File uploads, media metadata
 
-CREATE SCHEMA media_service;
+-- Create database
+CREATE DATABASE media_service_db;
+\c media_service_db;
 
 -- Media files
-CREATE TABLE media_service.media_files (
+CREATE TABLE media_files (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL, -- Reference to user service
     original_filename VARCHAR(255) NOT NULL,
@@ -254,8 +288,8 @@ CREATE TABLE media_service.media_files (
 );
 
 -- Media metadata
-CREATE TABLE media_service.media_metadata (
-    media_id UUID PRIMARY KEY REFERENCES media_service.media_files(id) ON DELETE CASCADE,
+CREATE TABLE media_metadata (
+    media_id UUID PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
     title VARCHAR(255),
     description TEXT,
     tags TEXT[] DEFAULT '{}',
@@ -265,10 +299,10 @@ CREATE TABLE media_service.media_metadata (
 );
 
 -- Indexes
-CREATE INDEX idx_media_files_user_id ON media_service.media_files(user_id);
-CREATE INDEX idx_media_files_file_type ON media_service.media_files(file_type);
-CREATE INDEX idx_media_files_created_at ON media_service.media_files(created_at DESC);
-CREATE INDEX idx_media_files_is_public ON media_service.media_files(is_public);
+CREATE INDEX idx_media_files_user_id ON media_files(user_id);
+CREATE INDEX idx_media_files_file_type ON media_files(file_type);
+CREATE INDEX idx_media_files_created_at ON media_files(created_at DESC);
+CREATE INDEX idx_media_files_is_public ON media_files(is_public);
 ```
 
 ### 6. Notification Service Database
@@ -276,10 +310,12 @@ CREATE INDEX idx_media_files_is_public ON media_service.media_files(is_public);
 -- notification_service_db
 -- Purpose: Notifications, notification preferences
 
-CREATE SCHEMA notification_service;
+-- Create database
+CREATE DATABASE notification_service_db;
+\c notification_service_db;
 
 -- Notifications
-CREATE TABLE notification_service.notifications (
+CREATE TABLE notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL, -- Reference to user service
     type VARCHAR(50) NOT NULL CHECK (type IN ('friend_request', 'like', 'comment', 'mention', 'message', 'system')),
@@ -291,7 +327,7 @@ CREATE TABLE notification_service.notifications (
 );
 
 -- Notification preferences
-CREATE TABLE notification_service.notification_preferences (
+CREATE TABLE notification_preferences (
     user_id VARCHAR(255) PRIMARY KEY, -- Reference to user service
     email_notifications JSONB DEFAULT '{"friend_requests": true, "post_likes": false, "comments": true, "messages": true}',
     push_notifications JSONB DEFAULT '{"friend_requests": true, "post_likes": true, "comments": true, "messages": true}',
@@ -301,10 +337,10 @@ CREATE TABLE notification_service.notification_preferences (
 );
 
 -- Indexes
-CREATE INDEX idx_notifications_user_id ON notification_service.notifications(user_id);
-CREATE INDEX idx_notifications_type ON notification_service.notifications(type);
-CREATE INDEX idx_notifications_is_read ON notification_service.notifications(is_read);
-CREATE INDEX idx_notifications_created_at ON notification_service.notifications(created_at DESC);
+CREATE INDEX idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX idx_notifications_type ON notifications(type);
+CREATE INDEX idx_notifications_is_read ON notifications(is_read);
+CREATE INDEX idx_notifications_created_at ON notifications(created_at DESC);
 ```
 
 ## 🔄 Data Consistency Patterns
@@ -431,6 +467,8 @@ services:
       POSTGRES_DB: auth_service_db
     volumes:
       - auth_db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
 
   user-db:
     image: postgres:15
@@ -438,6 +476,8 @@ services:
       POSTGRES_DB: user_service_db
     volumes:
       - user_db_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
 
   post-db:
     image: postgres:15
@@ -445,8 +485,43 @@ services:
       POSTGRES_DB: post_service_db
     volumes:
       - post_db_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
 
-  # ... other databases
+  message-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: message_service_db
+    volumes:
+      - message_db_data:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+
+  media-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: media_service_db
+    volumes:
+      - media_db_data:/var/lib/postgresql/data
+    ports:
+      - "5436:5432"
+
+  notification-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: notification_service_db
+    volumes:
+      - notification_db_data:/var/lib/postgresql/data
+    ports:
+      - "5437:5432"
+
+volumes:
+  auth_db_data:
+  user_db_data:
+  post_db_data:
+  message_db_data:
+  media_db_data:
+  notification_db_data:
 ```
 
 This database design properly implements the **Database per Service** pattern, ensuring each microservice owns its data and maintains loose coupling through events.
