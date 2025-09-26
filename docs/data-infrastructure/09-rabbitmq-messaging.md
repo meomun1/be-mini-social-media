@@ -343,6 +343,48 @@ export class EventConsumer {
 export const eventConsumer = new EventConsumer();
 ```
 
+## 📦 End-to-End Example: User Creates a Post
+
+1) Post Service writes to its own DB and publishes an event
+```typescript
+// services/post-service/publishers.ts
+await eventPublisher.publishPostCreated({
+  postId,
+  userId,
+  content,
+  privacyLevel,
+  tags
+});
+```
+
+2) RabbitMQ routes `post.created` (topic) to interested queues
+- `search-service-queue` → Search indexes the post
+- `notification-service-queue` → Notifications for followers/owner (on later interactions)
+
+3) Search Service consumes and indexes in Elasticsearch
+```typescript
+// services/search-service/eventHandlers.ts (excerpt)
+await consumer.subscribe(
+  'search-service-queue',
+  ['post.created'],
+  async (event) => {
+    if (event.eventType !== 'post.created') return;
+    // Fetch full post (author snapshot, tags, etc.) from Post Service API
+    const post = await postApi.fetchById(event.postId);
+    await postSearchService.indexPost(post);
+  }
+);
+```
+
+4) Later interactions publish more events (examples)
+- `comment.added` → Search indexes comment; Notification notifies post owner
+- `post.liked` → Notification creates like notification; Search may update popularity signals
+
+Why this pattern
+- Post API is fast and not blocked by Search/Notification work
+- Consumers can scale independently (more Search workers for heavy indexing)
+- If Search is down, messages buffer in `search-service-queue` until it recovers
+
 ## 🎯 Service-Specific Event Handlers
 
 ### Notification Service Handler
@@ -521,6 +563,155 @@ export class SearchEventHandlers {
 export const searchEventHandlers = new SearchEventHandlers();
 ```
 
+### User Service Event Handlers
+```typescript
+// services/user-service/eventHandlers.ts
+export class UserEventHandlers {
+  async initializeHandlers(): Promise<void> {
+    const consumer = new EventConsumer();
+    await consumer.initialize();
+
+    await consumer.subscribe(
+      'user-service-queue',
+      [
+        'user.registered',
+        'friend.request.sent',
+        'friend.request.accepted'
+      ],
+      async (event: Event) => {
+        switch (event.eventType) {
+          case 'user.registered':
+            await this.handleUserRegistered(event as any);
+            break;
+          case 'friend.request.sent':
+            await this.handleFriendRequestSent(event as any);
+            break;
+          case 'friend.request.accepted':
+            await this.handleFriendRequestAccepted(event as any);
+            break;
+        }
+      }
+    );
+  }
+
+  private async handleUserRegistered(event: UserRegisteredEvent): Promise<void> {
+    // Create user profile in User Service database
+    await this.userRepository.createProfile({
+      userId: event.userId,
+      email: event.email,
+      username: event.username,
+      firstName: event.firstName,
+      lastName: event.lastName
+    });
+  }
+
+  private async handleFriendRequestSent(event: FriendRequestSentEvent): Promise<void> {
+    // Update friendship status in User Service database
+    await this.friendshipRepository.updateStatus(event.requestId, 'pending');
+  }
+}
+```
+
+### Post Service Event Handlers
+```typescript
+// services/post-service/eventHandlers.ts
+export class PostEventHandlers {
+  async initializeHandlers(): Promise<void> {
+    const consumer = new EventConsumer();
+    await consumer.initialize();
+
+    await consumer.subscribe(
+      'post-service-queue',
+      [
+        'user.profile.updated',
+        'friend.request.accepted'
+      ],
+      async (event: Event) => {
+        switch (event.eventType) {
+          case 'user.profile.updated':
+            await this.handleUserProfileUpdated(event as any);
+            break;
+          case 'friend.request.accepted':
+            await this.handleFriendRequestAccepted(event as any);
+            break;
+        }
+      }
+    );
+  }
+
+  private async handleUserProfileUpdated(event: UserProfileUpdatedEvent): Promise<void> {
+    // Update user information in posts (denormalized data)
+    await this.postRepository.updateUserInfo(event.userId, event.updatedFields);
+  }
+
+  private async handleFriendRequestAccepted(event: FriendRequestAcceptedEvent): Promise<void> {
+    // Update feed visibility for new friends
+    await this.feedService.updateFeedVisibility(event.user1Id, event.user2Id);
+  }
+}
+```
+
+### Message Service Event Handlers
+```typescript
+// services/message-service/eventHandlers.ts
+export class MessageEventHandlers {
+  async initializeHandlers(): Promise<void> {
+    const consumer = new EventConsumer();
+    await consumer.initialize();
+
+    await consumer.subscribe(
+      'message-service-queue',
+      [
+        'friend.request.accepted'
+      ],
+      async (event: Event) => {
+        switch (event.eventType) {
+          case 'friend.request.accepted':
+            await this.handleFriendRequestAccepted(event as any);
+            break;
+        }
+      }
+    );
+  }
+
+  private async handleFriendRequestAccepted(event: FriendRequestAcceptedEvent): Promise<void> {
+    // Enable messaging between new friends
+    await this.conversationService.enableMessaging(event.user1Id, event.user2Id);
+  }
+}
+```
+
+### Media Service Event Handlers
+```typescript
+// services/media-service/eventHandlers.ts
+export class MediaEventHandlers {
+  async initializeHandlers(): Promise<void> {
+    const consumer = new EventConsumer();
+    await consumer.initialize();
+
+    await consumer.subscribe(
+      'media-service-queue',
+      [
+        'user.deleted'
+      ],
+      async (event: Event) => {
+        switch (event.eventType) {
+          case 'user.deleted':
+            await this.handleUserDeleted(event as any);
+            break;
+        }
+      }
+    );
+  }
+
+  private async handleUserDeleted(event: UserDeletedEvent): Promise<void> {
+    // Clean up user's media files
+    await this.mediaService.deleteUserMedia(event.userId);
+  }
+}
+```
+
+
 ## 🔄 Message Queues and Routing
 
 ### Queue Configuration
@@ -683,5 +874,66 @@ export class MessageBrokerMonitoring {
 
 export const messageBrokerMonitoring = new MessageBrokerMonitoring();
 ```
+
+## 📋 Complete Event Catalog
+
+### All Events by Service
+
+#### Auth Service Events (Published)
+- `user.registered` - New user registration
+- `user.login` - User login
+- `user.logout` - User logout
+
+#### User Service Events (Published)
+- `user.profile.updated` - Profile information updated
+- `friend.request.sent` - Friend request sent
+- `friend.request.accepted` - Friend request accepted
+- `friend.removed` - Friendship removed
+- `user.deleted` - User account deleted
+
+#### User Service Events (Consumed)
+- `user.registered` - Create user profile
+
+#### Post Service Events (Published)
+- `post.created` - New post created
+- `post.updated` - Post updated
+- `post.deleted` - Post deleted
+- `comment.added` - Comment added to post
+- `post.liked` - Post received reaction
+
+#### Post Service Events (Consumed)
+- `user.profile.updated` - Update user info in posts
+- `friend.request.accepted` - Update feed visibility
+
+#### Message Service Events (Published)
+- `message.sent` - Message sent
+- `conversation.created` - New conversation created
+
+#### Message Service Events (Consumed)
+- `friend.request.accepted` - Enable messaging between friends
+
+#### Media Service Events (Published)
+- `media.uploaded` - File uploaded
+- `media.processed` - Media processing complete
+- `media.deleted` - File deleted
+
+#### Media Service Events (Consumed)
+- `user.deleted` - Clean up user media files
+
+#### Search Service Events (Consumed)
+- `user.registered` - Index new user
+- `user.profile.updated` - Update user index
+- `user.deleted` - Remove from search index
+- `post.created` - Index new post
+- `post.updated` - Update post index
+- `post.deleted` - Remove from search index
+- `comment.added` - Index new comment
+
+#### Notification Service Events (Consumed)
+- `user.registered` - Send welcome notification
+- `post.liked` - Create like notification
+- `comment.added` - Create comment notification
+- `friend.request.sent` - Create friend request notification
+- `message.sent` - Create message notification
 
 This RabbitMQ implementation provides reliable event-driven communication between microservices with proper error handling, monitoring, and scalability features for our mini Facebook backend.
