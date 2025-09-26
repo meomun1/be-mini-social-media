@@ -2,11 +2,48 @@
 
 ## 🗄️ Overview
 
-PostgreSQL serves as our primary relational database, providing ACID compliance, advanced indexing, and robust data integrity for our mini Facebook backend.
+PostgreSQL serves as our primary relational database system, implementing the **"Database per Service"** pattern in our microservices architecture. Each microservice owns and manages its own PostgreSQL database, ensuring data isolation, independent scaling, and service autonomy.
 
-## 🏗️ Database Architecture
+## 🏗️ Microservices Database Architecture
 
-### Connection Management
+### Database per Service Pattern
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Auth Service   │    │  User Service   │    │  Post Service   │
+│  Port: 3100     │    │  Port: 3200     │    │  Port: 3300     │
+│                 │    │                 │    │                 │
+│  ┌───────────┐  │    │  ┌───────────┐  │    │  ┌───────────┐  │
+│  │   auth    │  │    │  │   users   │  │    │  │   posts   │  │
+│  │ database  │  │    │  │ database  │  │    │  │ database  │  │
+│  └───────────┘  │    │  └───────────┘  │    │  └───────────┘  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────┐
+                    │  Message Service │
+                    │  Port: 3400     │
+                    │                 │
+                    │  ┌───────────┐  │
+                    │  │ messages  │  │
+                    │  │ database  │  │
+                    │  └───────────┘  │
+                    └─────────────────┘
+```
+
+### Service Database Mapping
+| Service | Database Name | Port | Purpose |
+|---------|---------------|------|---------|
+| **Auth Service** | `auth_db` | 3100 | User authentication, sessions, tokens |
+| **User Service** | `users_db` | 3200 | User profiles, friendships, settings |
+| **Post Service** | `posts_db` | 3300 | Posts, comments, reactions |
+| **Message Service** | `messages_db` | 3400 | Direct messages, conversations |
+| **Media Service** | `media_db` | 3500 | File uploads, media metadata |
+| **Notification Service** | `notifications_db` | 3600 | User notifications, preferences |
+
+## 🔧 Database Connection Management
+
+### Service-Specific Database Connection
 ```typescript
 // infrastructure/database/connection.ts
 import { Pool, PoolClient } from 'pg';
@@ -14,11 +51,13 @@ import { logger } from '@/shared/utils/logger';
 
 class DatabaseConnection {
   private pool: Pool;
+  private serviceName: string;
   private isConnected = false;
 
-  constructor() {
+  constructor(serviceName: string) {
+    this.serviceName = serviceName;
     this.pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: process.env[`${serviceName.toUpperCase()}_DATABASE_URL`],
       max: parseInt(process.env.DB_POOL_SIZE || '10'),
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 2000,
@@ -26,7 +65,7 @@ class DatabaseConnection {
     });
 
     this.pool.on('error', (err) => {
-      logger.error('Unexpected error on idle client', err);
+      logger.error(`${serviceName} database error:`, err);
     });
   }
 
@@ -36,26 +75,26 @@ class DatabaseConnection {
       await client.query('SELECT NOW()');
       client.release();
       this.isConnected = true;
-      logger.info('Database connected successfully');
+      logger.info(`${this.serviceName} database connected successfully`);
     } catch (error) {
-      logger.error('Database connection failed:', error);
+      logger.error(`${this.serviceName} database connection failed:`, error);
       throw error;
     }
   }
 
   async query(text: string, params?: any[]): Promise<any> {
     if (!this.isConnected) {
-      throw new Error('Database not connected');
+      throw new Error(`${this.serviceName} database not connected`);
     }
 
     const start = Date.now();
     try {
       const result = await this.pool.query(text, params);
       const duration = Date.now() - start;
-      logger.debug('Query executed', { query: text, duration, rows: result.rowCount });
+      logger.debug(`${this.serviceName} query executed`, { query: text, duration, rows: result.rowCount });
       return result;
     } catch (error) {
-      logger.error('Database query error:', error);
+      logger.error(`${this.serviceName} database query error:`, error);
       throw error;
     }
   }
@@ -78,24 +117,124 @@ class DatabaseConnection {
   async close(): Promise<void> {
     await this.pool.end();
     this.isConnected = false;
-    logger.info('Database connection closed');
+    logger.info(`${this.serviceName} database connection closed`);
   }
 }
 
-export const db = new DatabaseConnection();
-export const connectDatabase = () => db.connect();
+// Service-specific database connections
+export const authDb = new DatabaseConnection('auth');
+export const usersDb = new DatabaseConnection('users');
+export const postsDb = new DatabaseConnection('posts');
+export const messagesDb = new DatabaseConnection('messages');
+export const mediaDb = new DatabaseConnection('media');
+export const notificationsDb = new DatabaseConnection('notifications');
+
+export const connectDatabases = () => Promise.all([
+  authDb.connect(),
+  usersDb.connect(),
+  postsDb.connect(),
+  messagesDb.connect(),
+  mediaDb.connect(),
+  notificationsDb.connect()
+]);
 ```
 
-## 📊 Database Schema
+## 📊 Service-Specific Database Schemas
 
-### Users Schema
+### 1. Auth Service Database (`auth_db`)
 ```sql
--- Create users table
+-- Create auth database
+CREATE DATABASE auth_db;
+
+-- Switch to auth database
+\c auth_db;
+
+-- Users table (minimal for authentication)
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(50) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    CONSTRAINT users_email_check CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
+    CONSTRAINT users_username_check CHECK (username ~* '^[a-zA-Z0-9_]{3,50}$'),
+    CONSTRAINT users_password_length CHECK (char_length(password_hash) >= 60)
+);
+
+-- Sessions table
+CREATE TABLE IF NOT EXISTS sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    CONSTRAINT sessions_token_hash_unique UNIQUE(token_hash)
+);
+
+-- Refresh tokens table
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    is_revoked BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    CONSTRAINT refresh_tokens_token_hash_unique UNIQUE(token_hash)
+);
+
+-- Indexes
+-- Password resets
+CREATE TABLE IF NOT EXISTS password_resets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Email verifications
+CREATE TABLE IF NOT EXISTS email_verifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    verified_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token_hash);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token_hash);
+```
+
+### 2. User Service Database (`users_db`)
+```sql
+-- Create users database
+CREATE DATABASE users_db;
+
+-- Switch to users database
+\c users_db;
+
+-- User profiles table
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id UUID PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(50) UNIQUE NOT NULL,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
     profile_picture_url TEXT,
@@ -110,45 +249,54 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE,
     privacy_settings JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Privacy settings (separate table for clarity and indexing)
+CREATE TABLE IF NOT EXISTS privacy_settings (
+    user_id UUID PRIMARY KEY,
+    profile_visibility VARCHAR(20) DEFAULT 'friends' CHECK (profile_visibility IN ('public', 'friends', 'private')),
+    email_visibility VARCHAR(20) DEFAULT 'friends' CHECK (email_visibility IN ('public', 'friends', 'private')),
+    phone_visibility VARCHAR(20) DEFAULT 'private' CHECK (phone_visibility IN ('public', 'friends', 'private')),
+    search_visibility VARCHAR(20) DEFAULT 'public' CHECK (search_visibility IN ('public', 'friends', 'private')),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT privacy_settings_user_fk FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE
+);
+
+-- Friendships table
+CREATE TABLE IF NOT EXISTS friendships (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user1_id UUID NOT NULL,
+    user2_id UUID NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('pending', 'accepted', 'blocked')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
-    CONSTRAINT users_email_check CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
-    CONSTRAINT users_username_check CHECK (username ~* '^[a-zA-Z0-9_]{3,50}$'),
-    CONSTRAINT users_password_length CHECK (char_length(password_hash) >= 60)
+    CONSTRAINT friendships_different_users CHECK (user1_id != user2_id),
+    UNIQUE(user1_id, user2_id)
 );
 
--- Create indexes for users
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active);
-CREATE INDEX IF NOT EXISTS idx_users_is_verified ON users(is_verified);
-
--- Create full-text search index
-CREATE INDEX IF NOT EXISTS idx_users_search ON users USING gin(
-    to_tsvector('english', first_name || ' ' || last_name || ' ' || username)
-);
-
--- Create trigger for updated_at
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-CREATE TRIGGER update_users_updated_at 
-    BEFORE UPDATE ON users 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_user_profiles_email ON user_profiles(email);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_username ON user_profiles(username);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_created_at ON user_profiles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_friendships_user1_id ON friendships(user1_id);
+CREATE INDEX IF NOT EXISTS idx_friendships_user2_id ON friendships(user2_id);
+CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status);
 ```
 
-### Posts Schema
+### 3. Post Service Database (`posts_db`)
 ```sql
--- Create posts table
+-- Create posts database
+CREATE DATABASE posts_db;
+
+-- Switch to posts database
+\c posts_db;
+
+-- Posts table
 CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     content TEXT NOT NULL,
     media_urls TEXT[] DEFAULT '{}',
     location VARCHAR(255),
@@ -167,35 +315,11 @@ CREATE TABLE IF NOT EXISTS posts (
     CONSTRAINT posts_share_count_positive CHECK (share_count >= 0)
 );
 
--- Create indexes for posts
-CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
-CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_privacy_level ON posts(privacy_level);
-CREATE INDEX IF NOT EXISTS idx_posts_is_published ON posts(is_published);
-CREATE INDEX IF NOT EXISTS idx_posts_like_count ON posts(like_count DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_comment_count ON posts(comment_count DESC);
-
--- Create full-text search index for posts
-CREATE INDEX IF NOT EXISTS idx_posts_search ON posts USING gin(
-    to_tsvector('english', content)
-);
-
--- Create GIN index for tags array
-CREATE INDEX IF NOT EXISTS idx_posts_tags ON posts USING gin(tags);
-
--- Create trigger for updated_at
-CREATE TRIGGER update_posts_updated_at 
-    BEFORE UPDATE ON posts 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-```
-
-### Comments Schema
-```sql
--- Create comments table
+-- Comments table
 CREATE TABLE IF NOT EXISTS comments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     parent_comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     like_count INTEGER DEFAULT 0,
@@ -206,51 +330,10 @@ CREATE TABLE IF NOT EXISTS comments (
     CONSTRAINT comments_like_count_positive CHECK (like_count >= 0)
 );
 
--- Create indexes for comments
-CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
-CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
-CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON comments(parent_comment_id);
-CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at DESC);
-
--- Create trigger for updated_at
-CREATE TRIGGER update_comments_updated_at 
-    BEFORE UPDATE ON comments 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-```
-
-### Friendships Schema
-```sql
--- Create friendships table
-CREATE TABLE IF NOT EXISTS friendships (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user1_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    user2_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status VARCHAR(20) NOT NULL CHECK (status IN ('pending', 'accepted', 'blocked')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
-    CONSTRAINT friendships_different_users CHECK (user1_id != user2_id),
-    UNIQUE(user1_id, user2_id)
-);
-
--- Create indexes for friendships
-CREATE INDEX IF NOT EXISTS idx_friendships_user1_id ON friendships(user1_id);
-CREATE INDEX IF NOT EXISTS idx_friendships_user2_id ON friendships(user2_id);
-CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status);
-CREATE INDEX IF NOT EXISTS idx_friendships_created_at ON friendships(created_at DESC);
-
--- Create trigger for updated_at
-CREATE TRIGGER update_friendships_updated_at 
-    BEFORE UPDATE ON friendships 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-```
-
-### Reactions Schema
-```sql
--- Create reactions table
+-- Reactions table
 CREATE TABLE IF NOT EXISTS reactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
     post_id UUID REFERENCES posts(id) ON DELETE CASCADE,
     comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
     type VARCHAR(20) NOT NULL CHECK (type IN ('like', 'love', 'laugh', 'angry', 'sad')),
@@ -264,27 +347,241 @@ CREATE TABLE IF NOT EXISTS reactions (
     UNIQUE(user_id, comment_id, type)
 );
 
--- Create indexes for reactions
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
+CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_privacy_level ON posts(privacy_level);
+CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
 CREATE INDEX IF NOT EXISTS idx_reactions_user_id ON reactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_reactions_post_id ON reactions(post_id);
-CREATE INDEX IF NOT EXISTS idx_reactions_comment_id ON reactions(comment_id);
-CREATE INDEX IF NOT EXISTS idx_reactions_type ON reactions(type);
-CREATE INDEX IF NOT EXISTS idx_reactions_created_at ON reactions(created_at DESC);
 ```
 
-## 🔧 Database Operations
+### 4. Message Service Database (`messages_db`)
+```sql
+-- Create messages database
+CREATE DATABASE messages_db;
 
-### User Repository
+-- Switch to messages database
+\c messages_db;
+
+-- Conversations table
+CREATE TABLE IF NOT EXISTS conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type VARCHAR(20) DEFAULT 'direct' CHECK (type IN ('direct', 'group')),
+    name VARCHAR(255),
+    description TEXT,
+    created_by UUID NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Conversation participants table
+CREATE TABLE IF NOT EXISTS conversation_participants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    role VARCHAR(20) DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    UNIQUE(conversation_id, user_id)
+);
+
+-- Messages table
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_id UUID NOT NULL,
+    content TEXT NOT NULL,
+    message_type VARCHAR(20) DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'file', 'voice')),
+    media_url TEXT,
+    reply_to_message_id UUID REFERENCES messages(id),
+    is_edited BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_conversations_created_by ON conversations(created_by);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_conversation_id ON conversation_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON conversation_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC);
+```
+
+### 5. Media Service Database (`media_db`)
+```sql
+-- Create media database
+CREATE DATABASE media_db;
+
+-- Switch to media database
+\c media_db;
+
+-- Media files table
+CREATE TABLE IF NOT EXISTS media_files (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    original_filename VARCHAR(255) NOT NULL,
+    file_path TEXT NOT NULL,
+    file_size BIGINT NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    file_type VARCHAR(20) NOT NULL CHECK (file_type IN ('image', 'video', 'audio', 'document')),
+    width INTEGER,
+    height INTEGER,
+    duration INTEGER, -- in seconds for video/audio
+    thumbnail_path TEXT,
+    metadata JSONB DEFAULT '{}',
+    is_processed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Media collections table
+CREATE TABLE IF NOT EXISTS media_collections (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    is_public BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Collection items table
+CREATE TABLE IF NOT EXISTS collection_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection_id UUID NOT NULL REFERENCES media_collections(id) ON DELETE CASCADE,
+    media_file_id UUID NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    order_index INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    UNIQUE(collection_id, media_file_id)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_media_files_user_id ON media_files(user_id);
+CREATE INDEX IF NOT EXISTS idx_media_files_file_type ON media_files(file_type);
+CREATE INDEX IF NOT EXISTS idx_media_files_created_at ON media_files(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_collections_user_id ON media_collections(user_id);
+CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id);
+```
+
+### 6. Notification Service Database (`notifications_db`)
+```sql
+-- Create notifications database
+CREATE DATABASE notifications_db;
+
+-- Switch to notifications database
+\c notifications_db;
+
+-- Notifications table
+CREATE TABLE IF NOT EXISTS notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    data JSONB DEFAULT '{}',
+    is_read BOOLEAN DEFAULT FALSE,
+    is_sent BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    read_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Notification preferences table
+CREATE TABLE IF NOT EXISTS notification_preferences (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    email_enabled BOOLEAN DEFAULT TRUE,
+    push_enabled BOOLEAN DEFAULT TRUE,
+    in_app_enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    UNIQUE(user_id, type)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_preferences_user_id ON notification_preferences(user_id);
+```
+
+## 🔧 Service-Specific Repository Implementation
+
+### Auth Service Repository
 ```typescript
-// infrastructure/database/repositories/userRepository.ts
-import { db } from '../connection';
-import { User, CreateUserRequest, UpdateUserRequest } from '@/shared/types/user';
+// services/auth-service/database/userRepository.ts
+import { authDb } from '@/infrastructure/database/connection';
+import { User, CreateUserRequest } from '@/shared/types/user';
 
-export class UserRepository {
+export class AuthUserRepository {
   async create(userData: CreateUserRequest): Promise<User> {
     const query = `
-      INSERT INTO users (
-        email, username, password_hash, first_name, last_name,
+      INSERT INTO users (email, username, password_hash)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `;
+    
+    const values = [userData.email, userData.username, userData.passwordHash];
+    const result = await authDb.query(query, values);
+    return this.mapRowToUser(result.rows[0]);
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    const query = 'SELECT * FROM users WHERE email = $1 AND is_active = true';
+    const result = await authDb.query(query, [email]);
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    return this.mapRowToUser(result.rows[0]);
+  }
+
+  async findById(id: string): Promise<User | null> {
+    const query = 'SELECT * FROM users WHERE id = $1 AND is_active = true';
+    const result = await authDb.query(query, [id]);
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    return this.mapRowToUser(result.rows[0]);
+  }
+
+  private mapRowToUser(row: any): User {
+    return {
+      id: row.id,
+      email: row.email,
+      username: row.username,
+      isActive: row.is_active,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+}
+
+export const authUserRepository = new AuthUserRepository();
+```
+
+### User Service Repository
+```typescript
+// services/user-service/database/userProfileRepository.ts
+import { usersDb } from '@/infrastructure/database/connection';
+import { UserProfile, CreateUserProfileRequest } from '@/shared/types/user';
+
+export class UserProfileRepository {
+  async create(profileData: CreateUserProfileRequest): Promise<UserProfile> {
+    const query = `
+      INSERT INTO user_profiles (
+        id, email, username, first_name, last_name,
         date_of_birth, gender, phone_number, location, website,
         privacy_settings
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -292,57 +589,35 @@ export class UserRepository {
     `;
     
     const values = [
-      userData.email,
-      userData.username,
-      userData.passwordHash,
-      userData.firstName,
-      userData.lastName,
-      userData.dateOfBirth,
-      userData.gender,
-      userData.phoneNumber,
-      userData.location,
-      userData.website,
-      JSON.stringify(userData.privacySettings || {})
+      profileData.id,
+      profileData.email,
+      profileData.username,
+      profileData.firstName,
+      profileData.lastName,
+      profileData.dateOfBirth,
+      profileData.gender,
+      profileData.phoneNumber,
+      profileData.location,
+      profileData.website,
+      JSON.stringify(profileData.privacySettings || {})
     ];
 
-    const result = await db.query(query, values);
-    return this.mapRowToUser(result.rows[0]);
+    const result = await usersDb.query(query, values);
+    return this.mapRowToUserProfile(result.rows[0]);
   }
 
-  async findById(id: string): Promise<User | null> {
-    const query = 'SELECT * FROM users WHERE id = $1 AND is_active = true';
-    const result = await db.query(query, [id]);
+  async findById(id: string): Promise<UserProfile | null> {
+    const query = 'SELECT * FROM user_profiles WHERE id = $1 AND is_active = true';
+    const result = await usersDb.query(query, [id]);
     
     if (result.rows.length === 0) {
       return null;
     }
     
-    return this.mapRowToUser(result.rows[0]);
+    return this.mapRowToUserProfile(result.rows[0]);
   }
 
-  async findByEmail(email: string): Promise<User | null> {
-    const query = 'SELECT * FROM users WHERE email = $1 AND is_active = true';
-    const result = await db.query(query, [email]);
-    
-    if (result.rows.length === 0) {
-      return null;
-    }
-    
-    return this.mapRowToUser(result.rows[0]);
-  }
-
-  async findByUsername(username: string): Promise<User | null> {
-    const query = 'SELECT * FROM users WHERE username = $1 AND is_active = true';
-    const result = await db.query(query, [username]);
-    
-    if (result.rows.length === 0) {
-      return null;
-    }
-    
-    return this.mapRowToUser(result.rows[0]);
-  }
-
-  async update(id: string, updates: UpdateUserRequest): Promise<User> {
+  async update(id: string, updates: Partial<UserProfile>): Promise<UserProfile> {
     const setClause = [];
     const values = [];
     let paramCount = 1;
@@ -367,51 +642,22 @@ export class UserRepository {
 
     values.push(id);
     const query = `
-      UPDATE users 
+      UPDATE user_profiles 
       SET ${setClause.join(', ')}, updated_at = NOW()
       WHERE id = $${paramCount} AND is_active = true
       RETURNING *
     `;
 
-    const result = await db.query(query, values);
+    const result = await usersDb.query(query, values);
     
     if (result.rows.length === 0) {
-      throw new Error('User not found');
+      throw new Error('User profile not found');
     }
     
-    return this.mapRowToUser(result.rows[0]);
+    return this.mapRowToUserProfile(result.rows[0]);
   }
 
-  async search(query: string, limit: number = 20, offset: number = 0): Promise<User[]> {
-    const searchQuery = `
-      SELECT *, ts_rank(
-        to_tsvector('english', first_name || ' ' || last_name || ' ' || username),
-        plainto_tsquery('english', $1)
-      ) as rank
-      FROM users 
-      WHERE is_active = true 
-        AND (
-          first_name ILIKE $2 OR 
-          last_name ILIKE $2 OR 
-          username ILIKE $2 OR
-          to_tsvector('english', first_name || ' ' || last_name || ' ' || username) @@ plainto_tsquery('english', $1)
-        )
-      ORDER BY rank DESC, created_at DESC
-      LIMIT $3 OFFSET $4
-    `;
-
-    const searchTerm = `%${query}%`;
-    const result = await db.query(searchQuery, [query, searchTerm, limit, offset]);
-    
-    return result.rows.map(row => this.mapRowToUser(row));
-  }
-
-  async delete(id: string): Promise<void> {
-    const query = 'UPDATE users SET is_active = false WHERE id = $1';
-    await db.query(query, [id]);
-  }
-
-  private mapRowToUser(row: any): User {
+  private mapRowToUserProfile(row: any): UserProfile {
     return {
       id: row.id,
       email: row.email,
@@ -435,167 +681,106 @@ export class UserRepository {
   }
 }
 
-export const userRepository = new UserRepository();
+export const userProfileRepository = new UserProfileRepository();
 ```
 
-### Post Repository
+## 🔄 Cross-Service Data Synchronization
+
+### Event-Driven Data Consistency
 ```typescript
-// infrastructure/database/repositories/postRepository.ts
-import { db } from '../connection';
-import { Post, CreatePostRequest, UpdatePostRequest } from '@/shared/types/post';
+// shared/services/dataSyncService.ts
+import { eventPublisher } from '@/infrastructure/rabbitmq/eventPublisher';
+import { logger } from '@/shared/utils/logger';
 
-export class PostRepository {
-  async create(postData: CreatePostRequest): Promise<Post> {
-    const query = `
-      INSERT INTO posts (
-        user_id, content, media_urls, location, privacy_level, tags
-      ) VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `;
-    
-    const values = [
-      postData.userId,
-      postData.content,
-      postData.mediaUrls || [],
-      postData.location,
-      postData.privacyLevel || 'friends',
-      postData.tags || []
-    ];
-
-    const result = await db.query(query, values);
-    return this.mapRowToPost(result.rows[0]);
-  }
-
-  async findById(id: string): Promise<Post | null> {
-    const query = 'SELECT * FROM posts WHERE id = $1 AND is_published = true';
-    const result = await db.query(query, [id]);
-    
-    if (result.rows.length === 0) {
-      return null;
-    }
-    
-    return this.mapRowToPost(result.rows[0]);
-  }
-
-  async findByUserId(userId: string, limit: number = 20, offset: number = 0): Promise<Post[]> {
-    const query = `
-      SELECT * FROM posts 
-      WHERE user_id = $1 AND is_published = true
-      ORDER BY created_at DESC
-      LIMIT $2 OFFSET $3
-    `;
-    
-    const result = await db.query(query, [userId, limit, offset]);
-    return result.rows.map(row => this.mapRowToPost(row));
-  }
-
-  async getFeed(userId: string, limit: number = 20, offset: number = 0): Promise<Post[]> {
-    const query = `
-      WITH friend_posts AS (
-        SELECT p.*
-        FROM posts p
-        INNER JOIN friendships f ON (
-          (f.user1_id = $1 OR f.user2_id = $1) AND
-          f.status = 'accepted' AND
-          (f.user1_id = p.user_id OR f.user2_id = p.user_id)
-        )
-        WHERE p.privacy_level IN ('public', 'friends') 
-          AND p.is_published = true
-          AND p.user_id != $1
-      ),
-      public_posts AS (
-        SELECT * FROM posts 
-        WHERE privacy_level = 'public' 
-          AND is_published = true
-          AND user_id != $1
-      )
-      SELECT * FROM (
-        SELECT * FROM friend_posts
-        UNION ALL
-        SELECT * FROM public_posts
-      ) combined_posts
-      ORDER BY created_at DESC
-      LIMIT $2 OFFSET $3
-    `;
-
-    const result = await db.query(query, [userId, limit, offset]);
-    return result.rows.map(row => this.mapRowToPost(row));
-  }
-
-  async update(id: string, userId: string, updates: UpdatePostRequest): Promise<Post> {
-    const setClause = [];
-    const values = [];
-    let paramCount = 1;
-
-    Object.entries(updates).forEach(([key, value]) => {
-      if (value !== undefined) {
-        const dbKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
-        setClause.push(`${dbKey} = $${paramCount}`);
-        values.push(value);
-        paramCount++;
-      }
-    });
-
-    if (setClause.length === 0) {
-      throw new Error('No updates provided');
-    }
-
-    values.push(id, userId);
-    const query = `
-      UPDATE posts 
-      SET ${setClause.join(', ')}, updated_at = NOW()
-      WHERE id = $${paramCount} AND user_id = $${paramCount + 1} AND is_published = true
-      RETURNING *
-    `;
-
-    const result = await db.query(query, values);
-    
-    if (result.rows.length === 0) {
-      throw new Error('Post not found or not authorized');
-    }
-    
-    return this.mapRowToPost(result.rows[0]);
-  }
-
-  async delete(id: string, userId: string): Promise<void> {
-    const query = 'UPDATE posts SET is_published = false WHERE id = $1 AND user_id = $2';
-    const result = await db.query(query, [id, userId]);
-    
-    if (result.rowCount === 0) {
-      throw new Error('Post not found or not authorized');
+export class DataSyncService {
+  // When user registers in Auth Service, sync to User Service
+  async syncUserRegistration(userData: {
+    id: string;
+    email: string;
+    username: string;
+    firstName: string;
+    lastName: string;
+  }): Promise<void> {
+    try {
+      await eventPublisher.publishUserRegistered(userData);
+      logger.info('User registration synced to User Service', { userId: userData.id });
+    } catch (error) {
+      logger.error('Failed to sync user registration:', error);
+      throw error;
     }
   }
 
-  async incrementLikeCount(id: string): Promise<void> {
-    const query = 'UPDATE posts SET like_count = like_count + 1 WHERE id = $1';
-    await db.query(query, [id]);
-  }
-
-  async decrementLikeCount(id: string): Promise<void> {
-    const query = 'UPDATE posts SET like_count = GREATEST(like_count - 1, 0) WHERE id = $1';
-    await db.query(query, [id]);
-  }
-
-  private mapRowToPost(row: any): Post {
-    return {
-      id: row.id,
-      userId: row.user_id,
-      content: row.content,
-      mediaUrls: row.media_urls || [],
-      location: row.location,
-      privacyLevel: row.privacy_level,
-      tags: row.tags || [],
-      likeCount: row.like_count,
-      commentCount: row.comment_count,
-      shareCount: row.share_count,
-      isPublished: row.is_published,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    };
+  // When user profile updates in User Service, sync to other services
+  async syncUserProfileUpdate(userId: string, changes: string[], updatedFields: Record<string, any>): Promise<void> {
+    try {
+      await eventPublisher.publishEvent({
+        eventType: 'user.profile.updated',
+        userId,
+        changes,
+        updatedFields
+      }, 'user-service');
+      logger.info('User profile update synced', { userId, changes });
+    } catch (error) {
+      logger.error('Failed to sync user profile update:', error);
+      throw error;
+    }
   }
 }
 
-export const postRepository = new PostRepository();
+export const dataSyncService = new DataSyncService();
+```
+
+## 🚀 Database Migration Strategy
+
+### Service-Specific Migrations
+```typescript
+// services/auth-service/database/migrations.ts
+import { authDb } from '@/infrastructure/database/connection';
+import { logger } from '@/shared/utils/logger';
+
+export class AuthMigrations {
+  async runMigrations(): Promise<void> {
+    try {
+      // Create users table
+      await authDb.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          email VARCHAR(255) UNIQUE NOT NULL,
+          username VARCHAR(50) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+      `);
+
+      // Create sessions table
+      await authDb.query(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash VARCHAR(255) NOT NULL,
+          expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          ip_address INET,
+          user_agent TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+      `);
+
+      // Create indexes
+      await authDb.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+      await authDb.query('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)');
+      await authDb.query('CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)');
+
+      logger.info('Auth service migrations completed');
+    } catch (error) {
+      logger.error('Auth service migration failed:', error);
+      throw error;
+    }
+  }
+}
+
+export const authMigrations = new AuthMigrations();
 ```
 
 ## 🔍 Advanced Queries
@@ -776,60 +961,58 @@ CREATE POLICY public_posts_policy ON posts
 
 ## 🧪 Testing
 
-### Database Test Setup
+### Service-Specific Test Setup
 ```typescript
 // tests/database/setup.ts
 import { Pool } from 'pg';
 
-let testPool: Pool;
+// Create test databases for each service
+const createTestDatabases = async () => {
+  const adminPool = new Pool({
+    connectionString: process.env.TEST_DATABASE_URL
+  });
+
+  const services = ['auth', 'users', 'posts', 'messages', 'media', 'notifications'];
+  
+  for (const service of services) {
+    try {
+      await adminPool.query(`DROP DATABASE IF EXISTS ${service}_test_db`);
+      await adminPool.query(`CREATE DATABASE ${service}_test_db`);
+    } catch (error) {
+      console.error(`Failed to create test database for ${service}:`, error);
+    }
+  }
+
+  await adminPool.end();
+};
 
 beforeAll(async () => {
-  testPool = new Pool({
-    connectionString: process.env.TEST_DATABASE_URL,
-    max: 5,
-  });
-  
-  // Run migrations for test database
-  await runMigrations(testPool);
+  await createTestDatabases();
 });
 
-afterAll(async () => {
-  await testPool.end();
-});
-
-beforeEach(async () => {
-  // Clean up test data before each test
-  await testPool.query('TRUNCATE TABLE reactions, comments, posts, friendships, users RESTART IDENTITY CASCADE');
-});
-
-export { testPool };
+export { createTestDatabases };
 ```
 
-### Repository Tests
+### Service-Specific Repository Tests
 ```typescript
-// tests/repositories/userRepository.test.ts
-import { userRepository } from '@/infrastructure/database/repositories/userRepository';
-import { testPool } from '../database/setup';
+// tests/auth-service/userRepository.test.ts
+import { authUserRepository } from '@/services/auth-service/database/userRepository';
+import { authDb } from '@/infrastructure/database/connection';
 
-describe('UserRepository', () => {
+describe('AuthUserRepository', () => {
   beforeEach(async () => {
-    await testPool.query('TRUNCATE TABLE users RESTART IDENTITY CASCADE');
+    await authDb.query('TRUNCATE TABLE users RESTART IDENTITY CASCADE');
   });
 
   describe('create', () => {
-    it('should create a new user', async () => {
+    it('should create a new user in auth database', async () => {
       const userData = {
         email: 'test@example.com',
         username: 'testuser',
-        passwordHash: 'hashedpassword',
-        firstName: 'Test',
-        lastName: 'User',
-        dateOfBirth: '1990-01-01',
-        gender: 'male' as const,
-        privacySettings: { profileVisibility: 'public' as const }
+        passwordHash: 'hashedpassword'
       };
 
-      const user = await userRepository.create(userData);
+      const user = await authUserRepository.create(userData);
 
       expect(user.id).toBeDefined();
       expect(user.email).toBe(userData.email);
@@ -841,17 +1024,78 @@ describe('UserRepository', () => {
       const userData = {
         email: 'test@example.com',
         username: 'testuser',
-        passwordHash: 'hashedpassword',
-        firstName: 'Test',
-        lastName: 'User'
+        passwordHash: 'hashedpassword'
       };
 
-      await userRepository.create(userData);
+      await authUserRepository.create(userData);
 
-      await expect(userRepository.create(userData)).rejects.toThrow();
+      await expect(authUserRepository.create(userData)).rejects.toThrow();
+    });
+  });
+
+  describe('findByEmail', () => {
+    it('should find user by email', async () => {
+      const userData = {
+        email: 'test@example.com',
+        username: 'testuser',
+        passwordHash: 'hashedpassword'
+      };
+
+      await authUserRepository.create(userData);
+      const foundUser = await authUserRepository.findByEmail(userData.email);
+
+      expect(foundUser).toBeDefined();
+      expect(foundUser!.email).toBe(userData.email);
     });
   });
 });
 ```
 
-This PostgreSQL setup provides a robust, scalable, and secure database foundation for our mini Facebook backend with proper indexing, query optimization, and security measures.
+### Cross-Service Integration Tests
+```typescript
+// tests/integration/userRegistration.test.ts
+import { authUserRepository } from '@/services/auth-service/database/userRepository';
+import { userProfileRepository } from '@/services/user-service/database/userProfileRepository';
+import { eventConsumer } from '@/infrastructure/rabbitmq/eventConsumer';
+import { dataSyncService } from '@/shared/services/dataSyncService';
+
+describe('User Registration Integration', () => {
+  it('should sync user data between Auth and User services', async () => {
+    // Create user in Auth service
+    const userData = {
+      email: 'test@example.com',
+      username: 'testuser',
+      passwordHash: 'hashedpassword'
+    };
+
+    const authUser = await authUserRepository.create(userData);
+
+    // Sync to User service via events
+    await dataSyncService.syncUserRegistration({
+      id: authUser.id,
+      email: authUser.email,
+      username: authUser.username,
+      firstName: 'Test',
+      lastName: 'User'
+    });
+
+    // Verify user profile was created in User service
+    const userProfile = await userProfileRepository.findById(authUser.id);
+    expect(userProfile).toBeDefined();
+    expect(userProfile!.email).toBe(authUser.email);
+    expect(userProfile!.username).toBe(authUser.username);
+  });
+});
+```
+
+This updated PostgreSQL implementation provides:
+
+1. **✅ Database per Service** - Each microservice has its own database
+2. **✅ Service Isolation** - Data is completely separated between services
+3. **✅ Independent Scaling** - Each database can be scaled independently
+4. **✅ Service Autonomy** - Each service owns and manages its data
+5. **✅ Event-Driven Sync** - Cross-service data consistency via events
+6. **✅ Service-Specific Repositories** - Each service has its own data access layer
+7. **✅ Independent Migrations** - Each service manages its own schema changes
+
+The architecture now properly supports microservices principles while maintaining data integrity and consistency across services! 🎉
