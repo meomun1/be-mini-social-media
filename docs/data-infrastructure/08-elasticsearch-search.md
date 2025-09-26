@@ -2,7 +2,7 @@
 
 ## 🔍 Overview
 
-Elasticsearch provides powerful full-text search capabilities for our mini Facebook backend, enabling users to search posts, comments, users, and other content with advanced filtering and ranking.
+Elasticsearch provides powerful full-text search capabilities for our mini Facebook backend microservices, enabling users to search posts, comments, users, and other content with advanced filtering and ranking. The Search Service (Port 3600) owns and manages all Elasticsearch operations while receiving indexing events from other microservices.
 
 ## 🏗️ Elasticsearch Setup
 
@@ -62,9 +62,111 @@ export const elasticsearchConnection = new ElasticsearchConnection();
 export const connectElasticsearch = () => elasticsearchConnection.connect();
 ```
 
+## 🏗️ Microservices Integration
+
+### Search Service Architecture
+```
+┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+│   Post Service  │   │   User Service  │   │  Media Service  │
+│   (Port 3300)   │   │   (Port 3200)   │   │   (Port 3500)   │
+│ Publishes:      │   │ Publishes:      │   │ Publishes:      │
+│ • post.created  │   │ • user.updated  │   │ • media.uploaded│
+│ • post.updated  │   │ • user.deleted  │   │ • media.deleted │
+│ • post.deleted  │   │                 │   │                 │
+└─────────┬───────┘   └─────────┬───────┘   └─────────┬───────┘
+          │                     │                     │
+          └─────────────────────┼─────────────────────┘
+                                ▼
+                   ┌───────────────────────────┐
+                   │       Search Service      │ (Port 3600)
+                   │  • Index posts/users/comments/media
+                   │  • Exposes /search APIs   │
+                   │  ┌──────────────────────┐ │
+                   │  │   Elasticsearch      │ │
+                   │  │  posts/users/comments│ │
+                   │  │  media (indices)     │ │
+                   │  └──────────────────────┘ │
+                   └───────────────────────────┘
+```
+
+Search APIs (served by Search Service):
+- GET /search/posts
+- GET /search/users
+- GET /search/comments
+- GET /search/media
+
+### Event-Driven Indexing
+How documents reach Elasticsearch:
+1) A domain change happens in the owning service (e.g., post.created).
+2) The service publishes an event to RabbitMQ.
+3) Search Service consumes the event and fetches the latest, authoritative record via the service’s REST API.
+4) Search Service upserts/deletes the corresponding document in the ES index.
+5) Queries hit ES for fast, relevance-ranked results (DB remains source of truth).
+
+The Search Service listens to events from other microservices to keep search indices synchronized:
+
+```typescript
+// Search Service Event Handlers (Posts, Users, Comments, Media)
+import { postSearchService } from './postSearchService';
+import { userSearchService } from './userSearchService';
+import { commentSearchService } from './commentSearchService';
+import { mediaSearchService } from './mediaSearchService';
+
+class SearchEventHandlers {
+  // Post events
+  async handlePostCreated(event: PostCreatedEvent): Promise<void> {
+    await postSearchService.indexPost(event.data.post);
+  }
+
+  async handlePostUpdated(event: PostUpdatedEvent): Promise<void> {
+    await postSearchService.updatePost(event.data.postId, event.data.updates);
+  }
+
+  async handlePostDeleted(event: PostDeletedEvent): Promise<void> {
+    await postSearchService.deletePost(event.data.postId);
+  }
+
+  // User events
+  async handleUserUpdated(event: UserUpdatedEvent): Promise<void> {
+    await userSearchService.updateUser(event.data.userId, event.data.updates);
+  }
+
+  async handleUserDeleted(event: UserDeletedEvent): Promise<void> {
+    await userSearchService.deleteUser(event.data.userId);
+  }
+
+  // Comment events
+  async handleCommentCreated(event: CommentAddedEvent): Promise<void> {
+    // Fetch full comment from Comment API if needed, or accept payload
+    await commentSearchService.indexComment(event.data.comment);
+  }
+
+  async handleCommentUpdated(event: CommentUpdatedEvent): Promise<void> {
+    await commentSearchService.updateComment(event.data.commentId, event.data.updates);
+  }
+
+  async handleCommentDeleted(event: CommentDeletedEvent): Promise<void> {
+    await commentSearchService.deleteComment(event.data.commentId);
+  }
+
+  // Media events
+  async handleMediaUploaded(event: MediaUploadedEvent): Promise<void> {
+    await mediaSearchService.indexMedia(event.data.media);
+  }
+
+  async handleMediaUpdated(event: MediaUpdatedEvent): Promise<void> {
+    await mediaSearchService.updateMedia(event.data.mediaId, event.data.updates);
+  }
+
+  async handleMediaDeleted(event: MediaDeletedEvent): Promise<void> {
+    await mediaSearchService.deleteMedia(event.data.mediaId);
+  }
+}
+```
+
 ## 📊 Index Mapping Configuration
 
-### Posts Index
+### Users Index
 ```json
 {
   "posts": {
@@ -131,7 +233,61 @@ export const connectElasticsearch = () => elasticsearchConnection.connect();
 }
 ```
 
-### Users Index
+### Posts Index
+```json
+{
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "autocomplete": { "tokenizer": "standard", "filter": ["lowercase", "edge_ngram"] }
+      },
+      "filter": { "edge_ngram": { "type": "edge_ngram", "min_gram": 2, "max_gram": 20 } }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "id": { "type": "keyword" },
+      "postId": { "type": "keyword" },
+      "parentCommentId": { "type": "keyword" },
+      "content": {
+        "type": "text",
+        "fields": {
+          "keyword": { "type": "keyword", "ignore_above": 256 },
+          "suggest": { "type": "completion" },
+          "autocomplete": { "type": "text", "analyzer": "autocomplete" }
+        }
+      },
+      "author": {
+        "properties": {
+          "id": { "type": "keyword" },
+          "username": { "type": "keyword" },
+          "displayName": { "type": "text" },
+          "avatarUrl": { "type": "keyword" }
+        }
+      },
+      "likeCount": { "type": "integer" },
+      "replyCount": { "type": "integer" },
+      "isFlagged": { "type": "boolean" },
+      "createdAt": { "type": "date" },
+      "updatedAt": { "type": "date" },
+      "privacyLevel": { "type": "keyword" },
+      "indexedAt": { "type": "date" }
+    }
+  }
+}
+```
+
+```ts
+// indices/commentsIndex.ts
+export async function ensureCommentsIndex(client: any): Promise<void> {
+  const exists = await client.indices.exists({ index: 'comments' });
+  if (!exists.body) {
+    await client.indices.create({ index: 'comments', body: /* mapping above */ undefined });
+  }
+}
+```
+
+### Comments Index
 ```json
 {
   "users": {
@@ -168,6 +324,51 @@ export const connectElasticsearch = () => elasticsearchConnection.connect();
         "updatedAt": { "type": "date" }
       }
     }
+  }
+}
+```
+
+### Media Index
+```json
+{
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "autocomplete": { "tokenizer": "standard", "filter": ["lowercase", "edge_ngram"] }
+      },
+      "filter": { "edge_ngram": { "type": "edge_ngram", "min_gram": 2, "max_gram": 20 } }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "id": { "type": "keyword" },
+      "ownerId": { "type": "keyword" },
+      "ownerUsername": { "type": "keyword" },
+      "type": { "type": "keyword" },
+      "mimeType": { "type": "keyword" },
+      "width": { "type": "integer" },
+      "height": { "type": "integer" },
+      "duration": { "type": "float" },
+      "altText": { "type": "text" },
+      "extractedText": { "type": "text" },
+      "tags": { "type": "keyword" },
+      "contentSafetyLabels": { "type": "keyword" },
+      "postId": { "type": "keyword" },
+      "privacyLevel": { "type": "keyword" },
+      "createdAt": { "type": "date" },
+      "updatedAt": { "type": "date" },
+      "indexedAt": { "type": "date" }
+    }
+  }
+}
+```
+
+```ts
+// indices/mediaIndex.ts
+export async function ensureMediaIndex(client: any): Promise<void> {
+  const exists = await client.indices.exists({ index: 'media' });
+  if (!exists.body) {
+    await client.indices.create({ index: 'media', body: /* mapping above */ undefined });
   }
 }
 ```
@@ -637,6 +838,87 @@ export class UserSearchService {
 export const userSearchService = new UserSearchService();
 ```
 
+### Comment Search Service
+```ts
+// infrastructure/elasticsearch/commentSearchService.ts
+import { elasticsearchConnection } from './connection';
+
+export class CommentSearchService {
+  private client = elasticsearchConnection.getClient();
+  private index = 'comments';
+
+  async search(query: string, filters: { postId?: string }, from = 0, size = 20) {
+    const must: any[] = [];
+    if (query) must.push({ match: { content: query } });
+    if (filters.postId) must.push({ term: { postId: filters.postId } });
+
+    return this.client.search({
+      index: this.index,
+      from,
+      size,
+      body: {
+        query: { bool: { must } },
+        sort: [{ createdAt: 'desc' }]
+      }
+    });
+  }
+
+  async indexComment(doc: any) {
+    await this.client.index({ index: this.index, id: doc.id, body: doc, refresh: 'wait_for' });
+  }
+
+  async updateComment(id: string, partial: any) {
+    await this.client.update({ index: this.index, id, body: { doc: partial }, refresh: 'wait_for' });
+  }
+
+  async deleteComment(id: string) {
+    await this.client.delete({ index: this.index, id, refresh: 'wait_for' });
+  }
+}
+export const commentSearchService = new CommentSearchService();
+```
+
+### Media Search Service
+```ts
+// infrastructure/elasticsearch/mediaSearchService.ts
+import { elasticsearchConnection } from './connection';
+
+export class MediaSearchService {
+  private client = elasticsearchConnection.getClient();
+  private index = 'media';
+
+  async search(query: string, filters: { ownerId?: string; type?: string }, from = 0, size = 20) {
+    const must: any[] = [];
+    if (query) must.push({ multi_match: { query, fields: ['altText', 'extractedText', 'tags'] } });
+    if (filters.ownerId) must.push({ term: { ownerId: filters.ownerId } });
+    if (filters.type) must.push({ term: { type: filters.type } });
+
+    return this.client.search({
+      index: this.index,
+      from,
+      size,
+      body: {
+        query: { bool: { must } },
+        sort: [{ createdAt: 'desc' }]
+      }
+    });
+  }
+
+  async indexMedia(doc: any) {
+    await this.client.index({ index: this.index, id: doc.id, body: doc, refresh: 'wait_for' });
+  }
+
+  async updateMedia(id: string, partial: any) {
+    await this.client.update({ index: this.index, id, body: { doc: partial }, refresh: 'wait_for' });
+  }
+
+  async deleteMedia(id: string) {
+    await this.client.delete({ index: this.index, id, refresh: 'wait_for' });
+  }
+}
+export const mediaSearchService = new MediaSearchService();
+```
+
 ## 📊 Analytics and Insights
 
 ### Search Analytics Service
@@ -706,4 +988,253 @@ export class SearchAnalyticsService {
 export const searchAnalyticsService = new SearchAnalyticsService();
 ```
 
-This Elasticsearch implementation provides powerful search capabilities with full-text search, filtering, suggestions, and analytics for our mini Facebook backend.
+## 🔧 Service-Specific Document Types
+
+### Document Type Definitions
+```typescript
+// shared/types/search.ts
+export interface PostDocument {
+  id: string;
+  userId: string;
+  user: {
+    id: string;
+    username: string;
+    firstName: string;
+    lastName: string;
+    profilePicture?: string;
+  };
+  content: string;
+  mediaUrls: string[];
+  tags: string[];
+  location?: {
+    lat: number;
+    lon: number;
+    name: string;
+  };
+  privacyLevel: 'public' | 'friends' | 'custom';
+  likeCount: number;
+  commentCount: number;
+  shareCount: number;
+  createdAt: string;
+  updatedAt: string;
+  indexedAt: string;
+}
+
+export interface UserDocument {
+  id: string;
+  email: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  bio?: string;
+  location?: string;
+  isVerified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  indexedAt: string;
+}
+
+export interface CommentDocument {
+  id: string;
+  postId: string;
+  userId: string;
+  user: {
+    id: string;
+    username: string;
+    firstName: string;
+    lastName: string;
+    profilePicture?: string;
+  };
+  content: string;
+  parentCommentId?: string;
+  likeCount: number;
+  createdAt: string;
+  updatedAt: string;
+  indexedAt: string;
+}
+
+export interface MediaDocument {
+  id: string;
+  userId: string;
+  user: {
+    id: string;
+    username: string;
+  };
+  originalFilename: string;
+  fileType: 'image' | 'video' | 'audio' | 'document';
+  mimeType: string;
+  fileSize: number;
+  width?: number;
+  height?: number;
+  duration?: number;
+  thumbnailUrl?: string;
+  isPublic: boolean;
+  tags: string[];
+  createdAt: string;
+  indexedAt: string;
+}
+```
+
+## 🔄 Cross-Service Data Synchronization
+
+### Data Consistency Strategy
+Since each microservice owns its data, the Search Service maintains search indices through events:
+
+```typescript
+// Search Service Event Consumer
+class SearchEventConsumer {
+  constructor(
+    private rabbitMQConsumer: RabbitMQConsumer,
+    private postSearchService: PostSearchService,
+    private userSearchService: UserSearchService,
+    private commentSearchService: CommentSearchService,
+    private mediaSearchService: MediaSearchService
+  ) {}
+
+  async startConsuming(): Promise<void> {
+    // Post events
+    await this.rabbitMQConsumer.subscribe('post.created', this.handlePostCreated.bind(this));
+    await this.rabbitMQConsumer.subscribe('post.updated', this.handlePostUpdated.bind(this));
+    await this.rabbitMQConsumer.subscribe('post.deleted', this.handlePostDeleted.bind(this));
+
+    // User events
+    await this.rabbitMQConsumer.subscribe('user.registered', this.handleUserRegistered.bind(this));
+    await this.rabbitMQConsumer.subscribe('user.profile.updated', this.handleUserUpdated.bind(this));
+    await this.rabbitMQConsumer.subscribe('user.deleted', this.handleUserDeleted.bind(this));
+
+    // Comment events
+    await this.rabbitMQConsumer.subscribe('comment.added', this.handleCommentAdded.bind(this));
+    await this.rabbitMQConsumer.subscribe('comment.updated', this.handleCommentUpdated.bind(this));
+    await this.rabbitMQConsumer.subscribe('comment.deleted', this.handleCommentDeleted.bind(this));
+
+    // Media events
+    await this.rabbitMQConsumer.subscribe('media.uploaded', this.handleMediaUploaded.bind(this));
+    await this.rabbitMQConsumer.subscribe('media.deleted', this.handleMediaDeleted.bind(this));
+  }
+
+  private async handlePostCreated(event: PostCreatedEvent): Promise<void> {
+    try {
+      // Fetch full post data from Post Service
+      const post = await this.fetchPostFromService(event.data.postId);
+      await this.postSearchService.indexPost(post);
+      
+      logger.info('Post indexed successfully', { postId: event.data.postId });
+    } catch (error) {
+      logger.error('Failed to index post', { postId: event.data.postId, error });
+      // Implement retry logic or dead letter queue
+    }
+  }
+
+  private async fetchPostFromService(postId: string): Promise<PostDocument> {
+    // Call Post Service API to get full post data
+    const response = await axios.get(`${process.env.POST_SERVICE_URL}/api/v1/posts/${postId}`, {
+      headers: {
+        'Authorization': `Bearer ${process.env.SERVICE_TOKEN}`,
+        'X-Service-ID': 'search-service'
+      }
+    });
+    
+    return response.data.data;
+  }
+}
+```
+
+### Search Service API Integration
+```typescript
+// Search Service Controller
+export class SearchController {
+  constructor(
+    private postSearchService: PostSearchService,
+    private userSearchService: UserSearchService,
+    private commentSearchService: CommentSearchService,
+    private mediaSearchService: MediaSearchService
+  ) {}
+
+  async searchPosts(req: Request, res: Response): Promise<void> {
+    try {
+      const { q, filters } = req.query;
+      const userId = req.user?.id;
+
+      // Apply privacy filters based on user context
+      const searchFilters = {
+        ...filters,
+        userId: userId, // Only show posts user can see
+        privacyLevel: this.determinePrivacyLevel(userId, filters)
+      };
+
+      const results = await this.postSearchService.searchPosts(q as string, searchFilters);
+      
+      res.json({
+        success: true,
+        data: {
+          posts: results,
+          pagination: {
+            total: results.length,
+            limit: parseInt(req.query.limit as string) || 20,
+            offset: parseInt(req.query.offset as string) || 0
+          }
+        }
+      });
+    } catch (error) {
+      logger.error('Search posts error:', error);
+      res.status(500).json({
+        success: false,
+        error: { code: 'SEARCH_FAILED', message: 'Search failed. Please try again.' }
+      });
+    }
+  }
+
+  async searchUsers(req: Request, res: Response): Promise<void> {
+    try {
+      const { q, isVerified, isActive, location } = req.query as any;
+      const results = await this.userSearchService.searchUsers(q as string || '', {
+        isVerified: isVerified !== undefined ? isVerified === 'true' : undefined,
+        isActive: isActive !== undefined ? isActive === 'true' : undefined,
+        location
+      });
+
+      res.json({ success: true, data: { users: results } });
+    } catch (error) {
+      logger.error('Search users error:', error);
+      res.status(500).json({ success: false, error: { code: 'SEARCH_FAILED', message: 'Search failed. Please try again.' } });
+    }
+  }
+
+  async searchComments(req: Request, res: Response): Promise<void> {
+    try {
+      const { q, postId, from, size } = req.query as any;
+      const response = await this.commentSearchService.search(q as string || '', { postId }, parseInt(from || '0', 10), parseInt(size || '20', 10));
+      res.json({ success: true, data: response.body?.hits?.hits?.map((h: any) => h._source) || [] });
+    } catch (error) {
+      logger.error('Search comments error:', error);
+      res.status(500).json({ success: false, error: { code: 'SEARCH_FAILED', message: 'Search failed. Please try again.' } });
+    }
+  }
+
+  async searchMedia(req: Request, res: Response): Promise<void> {
+    try {
+      const { q, ownerId, type, from, size } = req.query as any;
+      const response = await this.mediaSearchService.search(
+        q as string || '',
+        { ownerId, type },
+        parseInt(from || '0', 10),
+        parseInt(size || '20', 10)
+      );
+      res.json({ success: true, data: response.body?.hits?.hits?.map((h: any) => h._source) || [] });
+    } catch (error) {
+      logger.error('Search media error:', error);
+      res.status(500).json({ success: false, error: { code: 'SEARCH_FAILED', message: 'Search failed. Please try again.' } });
+    }
+  }
+
+  private determinePrivacyLevel(userId: string | undefined, filters: any): string[] {
+    if (!userId) {
+      return ['public']; // Anonymous users only see public posts
+    }
+    
+    return ['public', 'friends']; // Authenticated users see public and friends' posts
+  }
+}
+```
