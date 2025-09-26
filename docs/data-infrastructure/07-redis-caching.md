@@ -2,7 +2,7 @@
 
 ## 🔴 Overview
 
-Redis serves as our primary caching layer, session store, and pub/sub messaging system for real-time features in our mini Facebook backend.
+Redis serves as our primary caching layer, session store, and pub/sub messaging system for real-time features in our mini Facebook backend microservices architecture. Each service has its own Redis cache namespace and strategies while sharing the same Redis instance for efficiency.
 
 ## 🏗️ Redis Architecture
 
@@ -107,90 +107,154 @@ export const redisConnection = new RedisConnection();
 export const connectRedis = () => redisConnection.connect();
 ```
 
-## 🗂️ Cache Key Strategy
+## 🗂️ Service-Specific Cache Key Strategy
 
-### Key Naming Convention
+### Microservices Cache Namespace
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Auth Service   │    │  User Service   │    │  Post Service   │
+│  Port: 3100     │    │  Port: 3200     │    │  Port: 3300     │
+│                 │    │                 │    │                 │
+│  auth:user:123  │    │  users:123      │    │  posts:456      │
+│  auth:session   │    │  users:friends  │    │  posts:feed     │
+│  auth:tokens    │    │  users:profile  │    │  posts:comments │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────┐
+                    │  Shared Redis   │
+                    │  Instance       │
+                    │  Port: 6379     │
+                    │                 │
+                    │  Rate Limiting  │
+                    │  Pub/Sub        │
+                    │  Global Cache   │
+                    └─────────────────┘
+```
+
+### Service-Specific Key Naming Convention
 ```typescript
 // shared/utils/cacheKeys.ts
 export class CacheKeys {
-  // User related keys
-  static user(id: string): string {
-    return `user:${id}`;
+  // Auth Service Keys
+  static authUser(id: string): string {
+    return `auth:user:${id}`;
+  }
+
+  static authSession(id: string): string {
+    return `auth:session:${id}`;
+  }
+
+  static authRefreshToken(id: string): string {
+    return `auth:refresh:${id}`;
+  }
+
+  static authBlacklist(tokenHash: string): string {
+    return `auth:blacklist:${tokenHash}`;
+  }
+
+  // User Service Keys
+  static userProfile(id: string): string {
+    return `users:profile:${id}`;
   }
 
   static userFriends(id: string): string {
-    return `user:${id}:friends`;
-  }
-
-  static userProfile(id: string): string {
-    return `user:${id}:profile`;
+    return `users:friends:${id}`;
   }
 
   static userSettings(id: string): string {
-    return `user:${id}:settings`;
+    return `users:settings:${id}`;
   }
 
-  // Post related keys
+  static userSearch(query: string): string {
+    return `users:search:${Buffer.from(query).toString('base64')}`;
+  }
+
+  // Post Service Keys
   static post(id: string): string {
-    return `post:${id}`;
+    return `posts:post:${id}`;
   }
 
   static postComments(id: string): string {
-    return `post:${id}:comments`;
+    return `posts:comments:${id}`;
   }
 
   static postReactions(id: string): string {
-    return `post:${id}:reactions`;
+    return `posts:reactions:${id}`;
   }
 
   static userFeed(userId: string, page: number): string {
-    return `feed:${userId}:page:${page}`;
+    return `posts:feed:${userId}:page:${page}`;
   }
 
-  // Session keys
-  static session(id: string): string {
-    return `session:${id}`;
+  static trendingPosts(): string {
+    return 'posts:trending';
   }
 
-  static userSession(userId: string): string {
-    return `user:${userId}:session`;
-  }
-
-  // Message keys
+  // Message Service Keys
   static conversation(id: string): string {
-    return `conversation:${id}`;
+    return `messages:conversation:${id}`;
   }
 
   static conversationMessages(id: string, page: number): string {
-    return `conversation:${id}:messages:page:${page}`;
+    return `messages:conversation:${id}:messages:page:${page}`;
   }
 
-  // Notification keys
+  static userConversations(userId: string): string {
+    return `messages:user:${userId}:conversations`;
+  }
+
+  // Media Service Keys
+  static mediaFile(id: string): string {
+    return `media:file:${id}`;
+  }
+
+  static userMedia(userId: string, page: number): string {
+    return `media:user:${userId}:page:${page}`;
+  }
+
+  static mediaCollection(id: string): string {
+    return `media:collection:${id}`;
+  }
+
+  // Notification Service Keys
   static userNotifications(userId: string): string {
-    return `notifications:${userId}`;
+    return `notifications:user:${userId}`;
   }
 
   static unreadCount(userId: string): string {
-    return `notifications:${userId}:unread`;
+    return `notifications:unread:${userId}`;
   }
 
-  // Search keys
+  static notificationPreferences(userId: string): string {
+    return `notifications:preferences:${userId}`;
+  }
+
+  // Search Service Keys
   static searchSuggestions(query: string): string {
     return `search:suggestions:${Buffer.from(query).toString('base64')}`;
   }
 
-  static trendingPosts(): string {
-    return 'trending:posts';
+  static searchResults(query: string, filters: string): string {
+    return `search:results:${Buffer.from(query + filters).toString('base64')}`;
   }
 
-  // Rate limiting keys
+  // Global/Shared Keys
   static rateLimit(type: string, identifier: string): string {
-    return `rate_limit:${type}:${identifier}`;
+    return `global:rate_limit:${type}:${identifier}`;
   }
 
-  // Lock keys for distributed operations
   static lock(resource: string): string {
-    return `lock:${resource}`;
+    return `global:lock:${resource}`;
+  }
+
+  static userOnlineStatus(userId: string): string {
+    return `global:online:${userId}`;
+  }
+
+  static websocketConnections(): string {
+    return 'global:websocket:connections';
   }
 }
 ```
@@ -330,27 +394,80 @@ export class CacheService {
 export const cacheService = new CacheService();
 ```
 
-### User Cache Service
+### Auth Service Cache
 ```typescript
-// infrastructure/redis/userCacheService.ts
-import { cacheService } from './cacheService';
+// services/auth-service/cache/authCacheService.ts
+import { cacheService } from '@/infrastructure/redis/cacheService';
 import { CacheKeys } from '@/shared/utils/cacheKeys';
-import { User } from '@/shared/types/user';
+import { logger } from '@/shared/utils/logger';
+
+export class AuthCacheService {
+  private readonly SESSION_TTL = 86400; // 24 hours
+  private readonly REFRESH_TTL = 2592000; // 30 days
+  private readonly BLACKLIST_TTL = 86400; // 24 hours
+
+  async getSession(sessionId: string): Promise<any | null> {
+    const key = CacheKeys.authSession(sessionId);
+    return await cacheService.get(key);
+  }
+
+  async setSession(sessionId: string, sessionData: any): Promise<void> {
+    const key = CacheKeys.authSession(sessionId);
+    await cacheService.set(key, sessionData, this.SESSION_TTL);
+  }
+
+  async getRefreshToken(tokenId: string): Promise<any | null> {
+    const key = CacheKeys.authRefreshToken(tokenId);
+    return await cacheService.get(key);
+  }
+
+  async setRefreshToken(tokenId: string, tokenData: any): Promise<void> {
+    const key = CacheKeys.authRefreshToken(tokenId);
+    await cacheService.set(key, tokenData, this.REFRESH_TTL);
+  }
+
+  async blacklistToken(tokenHash: string): Promise<void> {
+    const key = CacheKeys.authBlacklist(tokenHash);
+    await cacheService.set(key, true, this.BLACKLIST_TTL);
+  }
+
+  async isTokenBlacklisted(tokenHash: string): Promise<boolean> {
+    const key = CacheKeys.authBlacklist(tokenHash);
+    const result = await cacheService.get(key);
+    return result === true;
+  }
+
+  async invalidateUserSessions(userId: string): Promise<void> {
+    const pattern = `auth:session:*`;
+    await cacheService.flushPattern(pattern);
+    logger.info('User sessions invalidated', { userId });
+  }
+}
+
+export const authCacheService = new AuthCacheService();
+```
+
+### User Service Cache
+```typescript
+// services/user-service/cache/userCacheService.ts
+import { cacheService } from '@/infrastructure/redis/cacheService';
+import { CacheKeys } from '@/shared/utils/cacheKeys';
+import { UserProfile } from '@/shared/types/user';
 import { logger } from '@/shared/utils/logger';
 
 export class UserCacheService {
-  private readonly USER_TTL = 3600; // 1 hour
-  private readonly FRIENDS_TTL = 1800; // 30 minutes
   private readonly PROFILE_TTL = 7200; // 2 hours
+  private readonly FRIENDS_TTL = 1800; // 30 minutes
+  private readonly SETTINGS_TTL = 3600; // 1 hour
 
-  async getUser(userId: string): Promise<User | null> {
-    const key = CacheKeys.user(userId);
-    return await cacheService.get<User>(key);
+  async getUserProfile(userId: string): Promise<UserProfile | null> {
+    const key = CacheKeys.userProfile(userId);
+    return await cacheService.get<UserProfile>(key);
   }
 
-  async setUser(user: User): Promise<void> {
-    const key = CacheKeys.user(user.id);
-    await cacheService.set(key, user, this.USER_TTL);
+  async setUserProfile(profile: UserProfile): Promise<void> {
+    const key = CacheKeys.userProfile(profile.id);
+    await cacheService.set(key, profile, this.PROFILE_TTL);
   }
 
   async getUserFriends(userId: string): Promise<string[] | null> {
@@ -363,21 +480,20 @@ export class UserCacheService {
     await cacheService.set(key, friendIds, this.FRIENDS_TTL);
   }
 
-  async getUserProfile(userId: string): Promise<User | null> {
-    const key = CacheKeys.userProfile(userId);
-    return await cacheService.get<User>(key);
+  async getUserSettings(userId: string): Promise<any | null> {
+    const key = CacheKeys.userSettings(userId);
+    return await cacheService.get(key);
   }
 
-  async setUserProfile(user: User): Promise<void> {
-    const key = CacheKeys.userProfile(user.id);
-    await cacheService.set(key, user, this.PROFILE_TTL);
+  async setUserSettings(userId: string, settings: any): Promise<void> {
+    const key = CacheKeys.userSettings(userId);
+    await cacheService.set(key, settings, this.SETTINGS_TTL);
   }
 
   async invalidateUser(userId: string): Promise<void> {
     const keys = [
-      CacheKeys.user(userId),
-      CacheKeys.userFriends(userId),
       CacheKeys.userProfile(userId),
+      CacheKeys.userFriends(userId),
       CacheKeys.userSettings(userId)
     ];
 
@@ -385,26 +501,18 @@ export class UserCacheService {
     logger.info('User cache invalidated', { userId });
   }
 
-  async invalidateUserFriends(userId: string): Promise<void> {
-    const key = CacheKeys.userFriends(userId);
-    await cacheService.del(key);
-  }
-
-  async warmUserCache(user: User): Promise<void> {
-    await Promise.all([
-      this.setUser(user),
-      this.setUserProfile(user)
-    ]);
+  async warmUserCache(profile: UserProfile): Promise<void> {
+    await this.setUserProfile(profile);
   }
 }
 
 export const userCacheService = new UserCacheService();
 ```
 
-### Post Cache Service
+### Post Service Cache
 ```typescript
-// infrastructure/redis/postCacheService.ts
-import { cacheService } from './cacheService';
+// services/post-service/cache/postCacheService.ts
+import { cacheService } from '@/infrastructure/redis/cacheService';
 import { CacheKeys } from '@/shared/utils/cacheKeys';
 import { Post } from '@/shared/types/post';
 import { logger } from '@/shared/utils/logger';
@@ -470,13 +578,13 @@ export class PostCacheService {
   }
 
   async invalidateAllFeeds(): Promise<void> {
-    const pattern = 'feed:*';
+    const pattern = 'posts:feed:*';
     await cacheService.flushPattern(pattern);
     logger.info('All user feeds invalidated');
   }
 
   async invalidateUserFeeds(userId: string): Promise<void> {
-    const pattern = `feed:${userId}:*`;
+    const pattern = `posts:feed:${userId}:*`;
     await cacheService.flushPattern(pattern);
     logger.info('User feeds invalidated', { userId });
   }
@@ -487,6 +595,68 @@ export class PostCacheService {
 }
 
 export const postCacheService = new PostCacheService();
+```
+
+### Message Service Cache
+```typescript
+// services/message-service/cache/messageCacheService.ts
+import { cacheService } from '@/infrastructure/redis/cacheService';
+import { CacheKeys } from '@/shared/utils/cacheKeys';
+import { logger } from '@/shared/utils/logger';
+
+export class MessageCacheService {
+  private readonly CONVERSATION_TTL = 3600; // 1 hour
+  private readonly MESSAGES_TTL = 1800; // 30 minutes
+  private readonly USER_CONVERSATIONS_TTL = 900; // 15 minutes
+
+  async getConversation(conversationId: string): Promise<any | null> {
+    const key = CacheKeys.conversation(conversationId);
+    return await cacheService.get(key);
+  }
+
+  async setConversation(conversation: any): Promise<void> {
+    const key = CacheKeys.conversation(conversation.id);
+    await cacheService.set(key, conversation, this.CONVERSATION_TTL);
+  }
+
+  async getConversationMessages(conversationId: string, page: number): Promise<any[] | null> {
+    const key = CacheKeys.conversationMessages(conversationId, page);
+    return await cacheService.get<any[]>(key);
+  }
+
+  async setConversationMessages(conversationId: string, page: number, messages: any[]): Promise<void> {
+    const key = CacheKeys.conversationMessages(conversationId, page);
+    await cacheService.set(key, messages, this.MESSAGES_TTL);
+  }
+
+  async getUserConversations(userId: string): Promise<any[] | null> {
+    const key = CacheKeys.userConversations(userId);
+    return await cacheService.get<any[]>(key);
+  }
+
+  async setUserConversations(userId: string, conversations: any[]): Promise<void> {
+    const key = CacheKeys.userConversations(userId);
+    await cacheService.set(key, conversations, this.USER_CONVERSATIONS_TTL);
+  }
+
+  async invalidateConversation(conversationId: string): Promise<void> {
+    const keys = [
+      CacheKeys.conversation(conversationId),
+      CacheKeys.userConversations('*') // Will need to invalidate for all participants
+    ];
+
+    await Promise.all(keys.map(key => cacheService.del(key)));
+    logger.info('Conversation cache invalidated', { conversationId });
+  }
+
+  async invalidateUserConversations(userId: string): Promise<void> {
+    const key = CacheKeys.userConversations(userId);
+    await cacheService.del(key);
+    logger.info('User conversations cache invalidated', { userId });
+  }
+}
+
+export const messageCacheService = new MessageCacheService();
 ```
 
 ## 🔐 Session Management
