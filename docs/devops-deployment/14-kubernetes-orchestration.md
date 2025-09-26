@@ -56,27 +56,27 @@ data:
   ELASTIC_PASSWORD: cGFzc3dvcmQ=    # password
 ```
 
-## 🗄️ Database Services
+## 🗄️ Database Services (Database per Service)
 
-### PostgreSQL Deployment
+### PostgreSQL Deployments (pattern)
 ```yaml
-# k8s/postgres.yaml
+# k8s/db-auth.yaml (repeat this pattern per service: users, posts, messages, media, notifications)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: postgres
+  name: auth-db
   namespace: mini-facebook
   labels:
-    app: postgres
+    app: auth-db
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: postgres
+      app: auth-db
   template:
     metadata:
       labels:
-        app: postgres
+        app: auth-db
     spec:
       containers:
       - name: postgres
@@ -85,7 +85,7 @@ spec:
         - containerPort: 5432
         env:
         - name: POSTGRES_DB
-          value: "minifacebook"
+          value: "auth_service_db"
         - name: POSTGRES_USER
           value: "postgres"
         - name: POSTGRES_PASSWORD
@@ -94,7 +94,7 @@ spec:
               name: mini-facebook-secrets
               key: DATABASE_PASSWORD
         volumeMounts:
-        - name: postgres-storage
+        - name: auth-db-storage
           mountPath: /var/lib/postgresql/data
         resources:
           requests:
@@ -120,19 +120,19 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
-      - name: postgres-storage
+      - name: auth-db-storage
         persistentVolumeClaim:
-          claimName: postgres-pvc
+          claimName: auth-db-pvc
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: postgres-service
+  name: auth-db-service
   namespace: mini-facebook
 spec:
   selector:
-    app: postgres
+    app: auth-db
   ports:
   - port: 5432
     targetPort: 5432
@@ -142,7 +142,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: postgres-pvc
+  name: auth-db-pvc
   namespace: mini-facebook
 spec:
   accessModes:
@@ -152,6 +152,8 @@ spec:
       storage: 10Gi
   storageClassName: fast-ssd
 ```
+
+Note: Create separate manifests for `users-db`, `posts-db`, `messages-db`, `media-db`, and `notifications-db` by copying this file and adjusting the names and `POSTGRES_DB` values accordingly (e.g., `user_service_db`, `post_service_db`, ...).
 
 ### Redis Deployment
 ```yaml
@@ -286,13 +288,7 @@ spec:
             configMapKeyRef:
               name: mini-facebook-config
               key: PORT
-        - name: DATABASE_URL
-          value: "postgresql://postgres:$(DATABASE_PASSWORD)@postgres-service:5432/minifacebook"
-        - name: DATABASE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: mini-facebook-secrets
-              key: DATABASE_PASSWORD
+        # API Gateway has no direct database; services own their databases
         - name: REDIS_URL
           value: "redis://:$(REDIS_PASSWORD)@redis-service:6379"
         - name: REDIS_PASSWORD
@@ -401,7 +397,7 @@ spec:
         - name: PORT
           value: "3100"
         - name: DATABASE_URL
-          value: "postgresql://postgres:$(DATABASE_PASSWORD)@postgres-service:5432/minifacebook"
+          value: "postgresql://postgres:$(DATABASE_PASSWORD)@auth-db-service:5432/auth_service_db"
         - name: DATABASE_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -676,3 +672,11 @@ spec:
 ```
 
 This Kubernetes configuration provides comprehensive container orchestration for our mini Facebook backend with proper scaling, monitoring, security, and deployment automation.
+
+## ✅ Next Steps & Known Gaps (to fill when deploying)
+
+- Database per service manifests: Auth DB provided as a pattern. Duplicate for `users-db`, `posts-db`, `messages-db`, `media-db`, `notifications-db` by changing names and `POSTGRES_DB`.
+- Secrets per environment: Ensure K8s `Secret` contains passwords for all DBs if different from `DATABASE_PASSWORD`.
+- Service-to-service networking: Optionally add NetworkPolicy rules per service for stricter egress/ingress.
+- Ingress: Confirm final domains (e.g., `api.minifacebook.com`, `ws.minifacebook.com`) and TLS secret names before go-live.
+- Observability: Add ServiceMonitors for each service exposing `/metrics` if you enable Prometheus exporters.

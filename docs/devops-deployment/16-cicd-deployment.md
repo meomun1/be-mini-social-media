@@ -43,11 +43,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
-      postgres:
+      auth_db:
         image: postgres:15
         env:
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
+          POSTGRES_DB: auth_service_db_test
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -55,6 +55,13 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+      users_db:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: user_service_db_test
+        ports:
+          - 5433:5432
       
       redis:
         image: redis:7
@@ -89,14 +96,16 @@ jobs:
       run: npm run test:unit
       env:
         NODE_ENV: test
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        AUTH_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/auth_service_db_test
+        USERS_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/user_service_db_test
         REDIS_URL: redis://localhost:6379
 
     - name: Run integration tests
       run: npm run test:integration
       env:
         NODE_ENV: test
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        AUTH_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/auth_service_db_test
+        USERS_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/user_service_db_test
         REDIS_URL: redis://localhost:6379
 
     - name: Generate test coverage
@@ -196,12 +205,13 @@ jobs:
         method: kubeconfig
         kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
 
-    - name: Deploy to staging
+    - name: Deploy to staging (all services)
       run: |
-        # Update image tags in Kubernetes manifests
-        sed -i "s|image: mini-facebook/.*:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/gateway:develop|g" k8s/gateway.yaml
-        sed -i "s|image: mini-facebook/.*:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:develop|g" k8s/auth-service.yaml
-        
+        # Update image tags for each service manifest
+        for svc in gateway auth-service user-service post-service message-service media-service search-service notification-service; do
+          sed -i "s|image: .*/$svc:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/$svc:develop|g" k8s/$svc.yaml || true
+        done
+
         # Apply Kubernetes manifests
         kubectl apply -f k8s/namespace.yaml
         kubectl apply -f k8s/configmap.yaml
@@ -233,12 +243,13 @@ jobs:
         method: kubeconfig
         kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
 
-    - name: Deploy to production
+    - name: Deploy to production (all services)
       run: |
-        # Update image tags in Kubernetes manifests
-        sed -i "s|image: mini-facebook/.*:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/gateway:main|g" k8s/gateway.yaml
-        sed -i "s|image: mini-facebook/.*:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:main|g" k8s/auth-service.yaml
-        
+        # Update image tags for each service manifest
+        for svc in gateway auth-service user-service post-service message-service media-service search-service notification-service; do
+          sed -i "s|image: .*/$svc:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/$svc:main|g" k8s/$svc.yaml || true
+        done
+
         # Apply Kubernetes manifests with rolling update
         kubectl apply -f k8s/namespace.yaml
         kubectl apply -f k8s/configmap.yaml
@@ -272,7 +283,7 @@ name: Database Migration
 on:
   push:
     paths:
-      - 'database/migrations/**'
+      - 'services/**/database/migrations/**'
   workflow_dispatch:
 
 jobs:
@@ -293,11 +304,22 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    - name: Run database migrations
-      run: npm run migrate
+    - name: Run database migrations (per service)
+      run: |
+        npm run migrate:auth
+        npm run migrate:user
+        npm run migrate:post
+        npm run migrate:message
+        npm run migrate:media
+        npm run migrate:notification
       env:
         NODE_ENV: staging
-        DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        AUTH_DATABASE_URL: ${{ secrets.STAGING_AUTH_DATABASE_URL }}
+        USERS_DATABASE_URL: ${{ secrets.STAGING_USERS_DATABASE_URL }}
+        POSTS_DATABASE_URL: ${{ secrets.STAGING_POSTS_DATABASE_URL }}
+        MESSAGES_DATABASE_URL: ${{ secrets.STAGING_MESSAGES_DATABASE_URL }}
+        MEDIA_DATABASE_URL: ${{ secrets.STAGING_MEDIA_DATABASE_URL }}
+        NOTIFICATIONS_DATABASE_URL: ${{ secrets.STAGING_NOTIFICATIONS_DATABASE_URL }}
 
     - name: Verify migration
       run: npm run migrate:status
@@ -324,11 +346,22 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    - name: Run database migrations
-      run: npm run migrate
+    - name: Run database migrations (per service)
+      run: |
+        npm run migrate:auth
+        npm run migrate:user
+        npm run migrate:post
+        npm run migrate:message
+        npm run migrate:media
+        npm run migrate:notification
       env:
         NODE_ENV: production
-        DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        AUTH_DATABASE_URL: ${{ secrets.PRODUCTION_AUTH_DATABASE_URL }}
+        USERS_DATABASE_URL: ${{ secrets.PRODUCTION_USERS_DATABASE_URL }}
+        POSTS_DATABASE_URL: ${{ secrets.PRODUCTION_POSTS_DATABASE_URL }}
+        MESSAGES_DATABASE_URL: ${{ secrets.PRODUCTION_MESSAGES_DATABASE_URL }}
+        MEDIA_DATABASE_URL: ${{ secrets.PRODUCTION_MEDIA_DATABASE_URL }}
+        NOTIFICATIONS_DATABASE_URL: ${{ secrets.PRODUCTION_NOTIFICATIONS_DATABASE_URL }}
 
     - name: Verify migration
       run: npm run migrate:status
@@ -612,3 +645,106 @@ echo "Rollback completed"
 ```
 
 This CI/CD pipeline provides comprehensive automation for testing, building, security scanning, and deploying our mini Facebook backend with proper monitoring, rollback procedures, and deployment strategies.
+
+## ✅ Next Steps & Known Gaps (to fill when wiring environments)
+
+- Secrets: Provide per-service DB URLs in repo/environment secrets:
+  - STAGING_AUTH_DATABASE_URL, STAGING_USERS_DATABASE_URL, STAGING_POSTS_DATABASE_URL, STAGING_MESSAGES_DATABASE_URL, STAGING_MEDIA_DATABASE_URL, STAGING_NOTIFICATIONS_DATABASE_URL
+  - PRODUCTION_AUTH_DATABASE_URL, PRODUCTION_USERS_DATABASE_URL, PRODUCTION_POSTS_DATABASE_URL, PRODUCTION_MESSAGES_DATABASE_URL, PRODUCTION_MEDIA_DATABASE_URL, PRODUCTION_NOTIFICATIONS_DATABASE_URL
+- Manifests: Ensure `k8s/<service>.yaml` exists for all services referenced in the deploy loops.
+- Image registry: Update `REGISTRY` if not using GitHub Container Registry.
+- Smoke tests: Point to your staging/production domains and add minimal auth tokens if endpoints require them.
+
+## 🧭 Runbook (Quick Commands)
+
+### Local development
+```bash
+# Start full local stack (DBs per service, Redis, ES, RabbitMQ, gateway + services)
+docker-compose -f docker-compose.dev.yml up -d
+
+# Tail logs for a service
+docker-compose -f docker-compose.dev.yml logs -f user-service
+
+# Stop stack
+docker-compose -f docker-compose.dev.yml down
+```
+
+### Database migrations (per service)
+```bash
+# Auth
+npm run migrate:auth
+# Users
+npm run migrate:user
+# Posts
+npm run migrate:post
+# Messages
+npm run migrate:message
+# Media
+npm run migrate:media
+# Notifications
+npm run migrate:notification
+```
+
+### Seeding (if seeds are available)
+```bash
+npm run seed:auth && npm run seed:user && npm run seed:post
+```
+
+### Testing
+```bash
+# Unit
+npm run test:unit
+# Integration
+npm run test:integration
+# Coverage
+npm run test:coverage
+```
+
+### Build images locally (all services)
+```bash
+./scripts/build.sh
+```
+
+### Kubernetes deploy (manually)
+```bash
+# Set context
+kubectl config use-context <your-cluster>
+
+# Apply core config
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/secrets.yaml
+
+# Apply data plane (Redis/ES/RabbitMQ) and DBs
+kubectl apply -f k8s/redis.yaml
+kubectl apply -f k8s/elasticsearch.yaml  # if present
+kubectl apply -f k8s/rabbitmq.yaml       # if present
+# DBs per service: auth-db shown as pattern; apply others when created
+kubectl apply -f k8s/db-auth.yaml
+
+# Apply apps
+kubectl apply -f k8s/api-gateway.yaml
+kubectl apply -f k8s/auth-service.yaml
+kubectl apply -f k8s/user-service.yaml
+kubectl apply -f k8s/post-service.yaml
+kubectl apply -f k8s/message-service.yaml
+kubectl apply -f k8s/media-service.yaml
+kubectl apply -f k8s/search-service.yaml
+kubectl apply -f k8s/notification-service.yaml
+
+# Wait for readiness
+kubectl rollout status deployment/auth-service -n mini-facebook
+```
+
+### CI/CD usage
+```text
+Merge to develop → builds images and deploys to staging.
+Merge to main → builds images and deploys to production.
+Database migrations run per-service via the Migrations workflow.
+```
+
+### Rollback
+```bash
+# Roll back API gateway (example)
+kubectl rollout undo deployment/api-gateway -n mini-facebook
+```
