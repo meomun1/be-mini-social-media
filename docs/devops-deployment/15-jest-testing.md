@@ -53,16 +53,17 @@ module.exports = {
 };
 ```
 
-### Test Setup File
+### Test Setup File (per service)
 ```typescript
-// tests/setup.ts
+// tests/setup.ts (example: user-service)
 import { connectDatabase } from '@/infrastructure/database/connection';
 import { connectRedis } from '@/infrastructure/redis/connection';
 import { connectElasticsearch } from '@/infrastructure/elasticsearch/connection';
 import { connectRabbitMQ } from '@/infrastructure/rabbitmq/connection';
 
 beforeAll(async () => {
-  // Setup test database
+  // Setup test database (target the service DB)
+  process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:password@localhost:5433/user_service_db_test';
   await connectDatabase();
   await connectRedis();
   await connectElasticsearch();

@@ -105,27 +105,84 @@ CMD ["node", "dist/index.js"]
 
 ## 🔧 Docker Compose Configuration
 
-### Development Environment
+### Development Environment (Database per Service)
 ```yaml
 # docker-compose.dev.yml
 version: '3.8'
 
 services:
-  # PostgreSQL Database
-  postgres:
+  # PostgreSQL Databases (one per service)
+  auth-db:
     image: postgres:15-alpine
-    container_name: mini-facebook-postgres
     environment:
-      POSTGRES_DB: minifacebook
+      POSTGRES_DB: auth_service_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./database/init:/docker-entrypoint-initdb.d
-    networks:
-      - mini-facebook-network
+      - auth_db_data:/var/lib/postgresql/data
+    networks: [mini-facebook-network]
+
+  users-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: user_service_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - users_db_data:/var/lib/postgresql/data
+    networks: [mini-facebook-network]
+
+  posts-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: post_service_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5434:5432"
+    volumes:
+      - posts_db_data:/var/lib/postgresql/data
+    networks: [mini-facebook-network]
+
+  messages-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: message_service_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5435:5432"
+    volumes:
+      - messages_db_data:/var/lib/postgresql/data
+    networks: [mini-facebook-network]
+
+  media-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: media_service_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5436:5432"
+    volumes:
+      - media_db_data:/var/lib/postgresql/data
+    networks: [mini-facebook-network]
+
+  notifications-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: notification_service_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5437:5432"
+    volumes:
+      - notifications_db_data:/var/lib/postgresql/data
+    networks: [mini-facebook-network]
 
   # Redis Cache
   redis:
@@ -178,14 +235,12 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3000
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
       - REDIS_URL=redis://redis:6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672
     ports:
       - "3000:3000"
     depends_on:
-      - postgres
       - redis
       - elasticsearch
       - rabbitmq
@@ -204,13 +259,13 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3100
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
+      - DATABASE_URL=postgresql://postgres:password@auth-db:5432/auth_service_db
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672
     ports:
       - "3100:3100"
     depends_on:
-      - postgres
+      - auth-db
       - redis
       - rabbitmq
     networks:
@@ -228,14 +283,14 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3200
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
+      - DATABASE_URL=postgresql://postgres:password@users-db:5432/user_service_db
       - REDIS_URL=redis://redis:6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672
     ports:
       - "3200:3200"
     depends_on:
-      - postgres
+      - users-db
       - redis
       - elasticsearch
       - rabbitmq
@@ -254,14 +309,14 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3300
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
+      - DATABASE_URL=postgresql://postgres:password@posts-db:5432/post_service_db
       - REDIS_URL=redis://redis:6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672
     ports:
       - "3300:3300"
     depends_on:
-      - postgres
+      - posts-db
       - redis
       - elasticsearch
       - rabbitmq
@@ -280,13 +335,13 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3400
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
+      - DATABASE_URL=postgresql://postgres:password@messages-db:5432/message_service_db
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672
     ports:
       - "3400:3400"
     depends_on:
-      - postgres
+      - messages-db
       - redis
       - rabbitmq
     networks:
@@ -304,12 +359,12 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3500
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
+      - DATABASE_URL=postgresql://postgres:password@media-db:5432/media_service_db
       - REDIS_URL=redis://redis:6379
     ports:
       - "3500:3500"
     depends_on:
-      - postgres
+      - media-db
       - redis
     networks:
       - mini-facebook-network
@@ -349,13 +404,13 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3700
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/minifacebook
+      - DATABASE_URL=postgresql://postgres:password@notifications-db:5432/notification_service_db
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672
     ports:
       - "3700:3700"
     depends_on:
-      - postgres
+      - notifications-db
       - redis
       - rabbitmq
     networks:
@@ -365,7 +420,12 @@ services:
       - /app/node_modules
 
 volumes:
-  postgres_data:
+  auth_db_data:
+  users_db_data:
+  posts_db_data:
+  messages_db_data:
+  media_db_data:
+  notifications_db_data:
   redis_data:
   elasticsearch_data:
   rabbitmq_data:

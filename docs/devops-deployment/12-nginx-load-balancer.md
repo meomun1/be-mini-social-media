@@ -117,6 +117,18 @@ upstream media_backend {
     server 127.0.0.1:3501 weight=1 max_fails=3 fail_timeout=30s;
     server 127.0.0.1:3502 weight=1 max_fails=3 fail_timeout=30s;
 }
+
+upstream search_backend {
+    least_conn;
+    server 127.0.0.1:3601 weight=2 max_fails=3 fail_timeout=30s;
+    server 127.0.0.1:3602 weight=2 max_fails=3 fail_timeout=30s;
+}
+
+upstream notification_backend {
+    least_conn;
+    server 127.0.0.1:3701 weight=1 max_fails=3 fail_timeout=30s;
+    server 127.0.0.1:3702 weight=1 max_fails=3 fail_timeout=30s;
+}
 ```
 
 ### Main Server Block
@@ -228,6 +240,26 @@ server {
     # Post endpoints
     location /api/v1/posts/ {
         proxy_pass http://post_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Search endpoints
+    location /api/v1/search/ {
+        proxy_pass http://search_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Notification endpoints
+    location /api/v1/notifications/ {
+        proxy_pass http://notification_backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
