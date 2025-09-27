@@ -1,0 +1,166 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Databases - One per service
+  auth-db:
+    image: postgres:15-alpine
+    container_name: auth-db
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: auth_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - auth_db_data:/var/lib/postgresql/data
+      - ./init-scripts/auth-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  users-db:
+    image: postgres:15-alpine
+    container_name: users-db
+    environment:
+      POSTGRES_DB: users_db
+      POSTGRES_USER: users_user
+      POSTGRES_PASSWORD: users_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - users_db_data:/var/lib/postgresql/data
+      - ./init-scripts/users-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  posts-db:
+    image: postgres:15-alpine
+    container_name: posts-db
+    environment:
+      POSTGRES_DB: posts_db
+      POSTGRES_USER: posts_user
+      POSTGRES_PASSWORD: posts_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - posts_db_data:/var/lib/postgresql/data
+      - ./init-scripts/posts-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  messages-db:
+    image: postgres:15-alpine
+    container_name: messages-db
+    environment:
+      POSTGRES_DB: messages_db
+      POSTGRES_USER: messages_user
+      POSTGRES_PASSWORD: messages_password
+    ports:
+      - "5435:5432"
+    volumes:
+      - messages_db_data:/var/lib/postgresql/data
+      - ./init-scripts/messages-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  media-db:
+    image: postgres:15-alpine
+    container_name: media-db
+    environment:
+      POSTGRES_DB: media_db
+      POSTGRES_USER: media_user
+      POSTGRES_PASSWORD: media_password
+    ports:
+      - "5436:5432"
+    volumes:
+      - media_db_data:/var/lib/postgresql/data
+      - ./init-scripts/media-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  search-db:
+    image: postgres:15-alpine
+    container_name: search-db
+    environment:
+      POSTGRES_DB: search_db
+      POSTGRES_USER: search_user
+      POSTGRES_PASSWORD: search_password
+    ports:
+      - "5437:5432"
+    volumes:
+      - search_db_data:/var/lib/postgresql/data
+      - ./init-scripts/search-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  notifications-db:
+    image: postgres:15-alpine
+    container_name: notifications-db
+    environment:
+      POSTGRES_DB: notifications_db
+      POSTGRES_USER: notifications_user
+      POSTGRES_PASSWORD: notifications_password
+    ports:
+      - "5438:5432"
+    volumes:
+      - notifications_db_data:/var/lib/postgresql/data
+      - ./init-scripts/notifications-db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - social-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - social-network
+
+  # RabbitMQ for messaging
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin_password
+    ports:
+      - "5672:5672" # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - social-network
+
+  # Elasticsearch for search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - social-network
+
+volumes:
+  auth_db_data:
+  users_db_data:
+  posts_db_data:
+  messages_db_data:
+  media_db_data:
+  search_db_data:
+  notifications_db_data:
+  redis_data:
+  rabbitmq_data:
+  elasticsearch_data:
+
+networks:
+  social-network:
+    driver: bridge
