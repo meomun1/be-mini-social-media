@@ -1,3 +1,4 @@
+// shared/src/types/common.ts → base types (ApiResponse, JWTConfig, etc.)
 export interface ApiResponse<T = any> {
   success: boolean;
   data?: T;
@@ -55,7 +56,7 @@ export interface AuditFields extends Timestamps {
   updated_by?: string;
 }
 
-export type ServiceName = 
+export type ServiceName =
   | 'auth'
   | 'user'
   | 'post'

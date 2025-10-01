@@ -1,3 +1,5 @@
+// shared/src/middleware/auth.ts → JWT middleware behavior and request augmentation
+
 import { Request, Response, NextFunction } from 'express';
 import { ApiResponseHelper } from '../utils/response';
 import { JWTPayload } from '../types';
@@ -34,14 +36,12 @@ export class AuthMiddlewareImpl implements AuthMiddleware {
   async authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authHeader = req.headers.authorization;
-      
+
       if (!authHeader) {
         return ApiResponseHelper.unauthorized(res, 'Authorization header is required');
       }
 
-      const token = authHeader.startsWith('Bearer ') 
-        ? authHeader.slice(7) 
-        : authHeader;
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 
       if (!token) {
         return ApiResponseHelper.unauthorized(res, 'Token is required');
@@ -49,7 +49,7 @@ export class AuthMiddlewareImpl implements AuthMiddleware {
 
       // Verify JWT token
       const payload = this.jwtVerify(token, this.jwtSecret);
-      
+
       // Check if token is expired
       if (payload.exp < Date.now() / 1000) {
         return ApiResponseHelper.unauthorized(res, 'Token has expired');
@@ -77,14 +77,12 @@ export class AuthMiddlewareImpl implements AuthMiddleware {
   async optional(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authHeader = req.headers.authorization;
-      
+
       if (!authHeader) {
         return next();
       }
 
-      const token = authHeader.startsWith('Bearer ') 
-        ? authHeader.slice(7) 
-        : authHeader;
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 
       if (!token) {
         return next();
@@ -93,7 +91,7 @@ export class AuthMiddlewareImpl implements AuthMiddleware {
       // Try to verify token, but don't fail if invalid
       try {
         const payload = this.jwtVerify(token, this.jwtSecret);
-        
+
         // Check if token is not expired
         if (payload.exp >= Date.now() / 1000 && payload.type === 'access') {
           req.user = {
@@ -142,9 +140,7 @@ export class RateLimitMiddleware {
 
   middleware() {
     return (req: Request, res: Response, next: NextFunction): void => {
-      const key = this.config.keyGenerator 
-        ? this.config.keyGenerator(req)
-        : req.ip || 'unknown';
+      const key = this.config.keyGenerator ? this.config.keyGenerator(req) : req.ip || 'unknown';
 
       const now = Date.now();
       const windowStart = now - this.config.windowMs;
@@ -176,10 +172,7 @@ export class RateLimitMiddleware {
       }
 
       if (current.count >= this.config.max) {
-        return ApiResponseHelper.tooManyRequests(
-          res, 
-          this.config.message || 'Too many requests'
-        );
+        return ApiResponseHelper.tooManyRequests(res, this.config.message || 'Too many requests');
       }
 
       current.count++;

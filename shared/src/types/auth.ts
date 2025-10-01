@@ -1,3 +1,5 @@
+// shared/src/types/auth.ts → domain models and request/response contracts
+
 import { BaseEntity, Timestamps } from './common';
 
 export interface User extends BaseEntity {
@@ -93,7 +95,16 @@ export interface ChangePasswordRequest {
 }
 
 export interface AuthError {
-  code: 'INVALID_CREDENTIALS' | 'USER_NOT_FOUND' | 'EMAIL_NOT_VERIFIED' | 'ACCOUNT_LOCKED' | 'TOKEN_EXPIRED' | 'TOKEN_INVALID' | 'PASSWORD_TOO_WEAK' | 'EMAIL_ALREADY_EXISTS' | 'USERNAME_ALREADY_EXISTS';
+  code:
+    | 'INVALID_CREDENTIALS'
+    | 'USER_NOT_FOUND'
+    | 'EMAIL_NOT_VERIFIED'
+    | 'ACCOUNT_LOCKED'
+    | 'TOKEN_EXPIRED'
+    | 'TOKEN_INVALID'
+    | 'PASSWORD_TOO_WEAK'
+    | 'EMAIL_ALREADY_EXISTS'
+    | 'USERNAME_ALREADY_EXISTS';
   message: string;
   details?: any;
 }

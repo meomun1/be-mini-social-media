@@ -1,3 +1,5 @@
+// shared/src/utils/response.ts → response shape helpers
+
 import { Response } from 'express';
 import { ApiResponse, PaginationParams } from '../types';
 
