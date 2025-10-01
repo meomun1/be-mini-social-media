@@ -60,11 +60,14 @@ class MigrationRunner {
   private getMigrationFiles(): Migration[] {
     const migrationsDir = join(__dirname, '.');
     const files = readdirSync(migrationsDir)
-      .filter(file => file.endsWith('.sql') && file.startsWith(/\d+_/))
+      .filter(file => file.endsWith('.sql') && /^\d+_/.test(file))
       .sort();
 
     return files.map(filename => {
       const id = filename.split('_')[0];
+      if (!id) {
+        throw new Error(`Invalid migration filename: ${filename}`);
+      }
       const filePath = join(migrationsDir, filename);
       const sql = readFileSync(filePath, 'utf8');
 

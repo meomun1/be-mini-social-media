@@ -4,11 +4,12 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "baseUrl": "./src",
+    "types": ["jest", "@types/jest", "node"],
     "paths": {
       "@/*": ["*"],
       "@shared/*": ["../../shared/src/*"]
     }
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["dist", "node_modules"]
 }
