@@ -79,10 +79,11 @@ be-mini-social-media/
 
 ### 2.4 Testing
 - [x] Unit tests for auth logic
-- [x] Integration tests for API endpoints
-- [x] Test database setup
+- [x] Integration tests for API endpoints (validation only)
+- [ ] Database integration tests
+- [ ] Test database setup and teardown
 
-**Deliverable**: ✅ **COMPLETED** - Fully functional Auth Service with comprehensive testing
+**Deliverable**: ⚠️ **PARTIALLY COMPLETED** - Auth Service functional but missing database integration tests
 
 ---
 
