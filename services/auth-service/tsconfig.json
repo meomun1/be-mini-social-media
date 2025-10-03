@@ -7,7 +7,8 @@
     "types": ["jest", "@types/jest", "node"],
     "paths": {
       "@/*": ["*"],
-      "@shared/*": ["../../shared/src/*"]
+      "@shared/*": ["../../shared/src/*"],
+      "@infrastructure/*": ["../../infrastructure/*"]
     }
   },
   "include": ["src/**/*"],
