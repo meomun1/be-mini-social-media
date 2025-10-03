@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { UserRepository } from '../repositories/UserRepository';
+import { AuthCacheService, SessionData, RefreshTokenData } from './AuthCacheService';
 import { jwtConfig, bcryptConfig } from '../config/app';
 import {
   User,
@@ -14,16 +15,18 @@ import {
   VerifyEmailRequest,
   ChangePasswordRequest,
 } from '@shared/types';
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@shared/types';
 import { AuthError } from '../utils/AuthError';
 
 const logger = createLogger('auth');
 
 export class AuthService {
   private userRepository: UserRepository;
+  private cacheService: AuthCacheService;
 
   constructor() {
     this.userRepository = new UserRepository();
+    this.cacheService = new AuthCacheService();
   }
 
   // User Registration
@@ -88,17 +91,52 @@ export class AuthService {
     try {
       logger.info('User login attempt', { email: credentials.email });
 
+      // Check rate limiting
+      if (ipAddress) {
+        const rateLimitResult = await this.cacheService.checkLoginRateLimit(ipAddress);
+        if (!rateLimitResult.allowed) {
+          throw new AuthError(
+            'RATE_LIMIT_EXCEEDED',
+            'Too many login attempts. Please try again later.'
+          );
+        }
+      }
+
       // Find user
       const user = await this.userRepository.findUserByEmail(credentials.email);
       if (!user) {
+        // Track failed attempt for rate limiting
+        if (ipAddress) {
+          await this.cacheService.checkLoginRateLimit(ipAddress);
+        }
         throw new AuthError('INVALID_CREDENTIALS', 'Invalid email or password');
+      }
+
+      // Check if account is locked due to failed attempts
+      const isAccountLocked = await this.cacheService.isAccountLocked(user.id);
+      if (isAccountLocked) {
+        throw new AuthError(
+          'ACCOUNT_LOCKED',
+          'Account is temporarily locked due to too many failed attempts'
+        );
       }
 
       // Verify password
       const isPasswordValid = await bcrypt.compare(credentials.password, user.password_hash);
       if (!isPasswordValid) {
+        // Track failed login attempt
+        await this.cacheService.incrementFailedAttempts(user.id);
+
+        // Track rate limiting
+        if (ipAddress) {
+          await this.cacheService.checkLoginRateLimit(ipAddress);
+        }
+
         throw new AuthError('INVALID_CREDENTIALS', 'Invalid email or password');
       }
+
+      // Clear failed attempts on successful login
+      await this.cacheService.clearFailedAttempts(user.id);
 
       // Check if user is active
       if (!user.is_active) {
@@ -110,20 +148,38 @@ export class AuthService {
       // Generate tokens
       const { access_token, refresh_token } = await this.generateTokenPair(user);
 
-      // Create session
+      // Create session in Redis
+      const sessionId = uuidv4();
+      const sessionData: SessionData = {
+        userId: user.id,
+        email: user.email,
+        username: user.username,
+        role: 'user', // Default role
+        permissions: ['read', 'write'], // Default permissions
+        lastActivity: new Date(),
+        ipAddress: ipAddress || '',
+        userAgent: userAgent || '',
+        createdAt: new Date(),
+      };
+
+      // Store session in Redis
+      await this.cacheService.setSession(sessionId, sessionData);
+      await this.cacheService.addUserSession(user.id, sessionId);
+
+      // Also store in database for persistence
       const sessionTokenHash = await this.hashToken(access_token);
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
-      const sessionData: any = {
+      const dbSessionData: any = {
         user_id: user.id,
         token_hash: sessionTokenHash,
         expires_at: expiresAt,
       };
 
-      if (ipAddress) sessionData.ip_address = ipAddress;
-      if (userAgent) sessionData.user_agent = userAgent;
+      if (ipAddress) dbSessionData.ip_address = ipAddress;
+      if (userAgent) dbSessionData.user_agent = userAgent;
 
-      await this.userRepository.createSession(sessionData);
+      await this.userRepository.createSession(dbSessionData);
 
       return {
         user: {
@@ -185,17 +241,25 @@ export class AuthService {
   }
 
   // Logout
-  async logout(accessToken: string): Promise<void> {
+  async logout(accessToken: string, userId?: string): Promise<void> {
     try {
       const tokenHash = await this.hashToken(accessToken);
 
-      // Find and delete session
+      // Blacklist the token in Redis
+      await this.cacheService.blacklistToken(tokenHash);
+
+      // Find and delete session from database
       const session = await this.userRepository.findSessionByTokenHash(tokenHash);
       if (session) {
         await this.userRepository.deleteSession(session.id);
       }
 
-      logger.info('User logged out successfully');
+      // If userId is provided, clean up Redis sessions
+      if (userId) {
+        await this.cacheService.invalidateUserSessions(userId);
+      }
+
+      logger.info('User logged out successfully', { userId, tokenHash });
     } catch (error) {
       const err = error as Error;
       logger.error('Logout failed', { error: err.message });
@@ -206,6 +270,15 @@ export class AuthService {
   // Forgot Password
   async forgotPassword(request: ForgotPasswordRequest): Promise<void> {
     try {
+      // Check rate limiting for password reset
+      const rateLimitResult = await this.cacheService.checkPasswordResetRateLimit(request.email);
+      if (!rateLimitResult.allowed) {
+        throw new AuthError(
+          'RATE_LIMIT_EXCEEDED',
+          'Too many password reset requests. Please try again later.'
+        );
+      }
+
       const user = await this.userRepository.findUserByEmail(request.email);
       if (!user) {
         // Don't reveal if email exists for security
@@ -338,6 +411,14 @@ export class AuthService {
       // Check if token is expired
       if (decoded.exp < Date.now() / 1000) {
         throw new AuthError('TOKEN_EXPIRED', 'Token has expired');
+      }
+
+      // Check if token is blacklisted
+      const tokenHash = await this.hashToken(token);
+      const isBlacklisted = await this.cacheService.isTokenBlacklisted(tokenHash);
+
+      if (isBlacklisted) {
+        throw new AuthError('TOKEN_BLACKLISTED', 'Token has been invalidated');
       }
 
       return decoded;

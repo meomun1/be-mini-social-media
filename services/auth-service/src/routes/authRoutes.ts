@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/AuthController';
-import { ValidationMiddlewareImpl } from '../../../../shared/dist/middleware/validation';
+import { ValidationMiddlewareImpl } from '@shared/types';
 import {
   RegisterDto,
   LoginDto,

@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { AuthService } from '../services/AuthService';
-import { ApiResponseHelper } from '../utils/response';
-import { createLogger } from '../utils/logger';
+import { createLogger, ApiResponseHelper } from '@shared/types';
 import {
   RegisterDto,
   LoginDto,
@@ -85,7 +84,7 @@ export class AuthController {
 
       const token = authHeader.replace('Bearer ', '');
 
-      await this.authService.logout(token);
+      await this.authService.logout(token, req.user?.id);
 
       logger.info('Logout successful', { userId: req.user?.id });
 

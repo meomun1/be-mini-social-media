@@ -4,11 +4,11 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { DatabaseConnection } from './config/database';
+import { redisConnection } from '../../../infrastructure/dist/redis/connection';
 import { appConfig, corsConfig, rateLimitConfig } from './config/app';
 import { AuthMiddlewareImpl } from '../../../shared/dist/middleware/auth';
 import { jwtConfig } from './config/app';
-import { createLogger } from './utils/logger';
-import { ApiResponseHelper } from './utils/response';
+import { createLogger, ApiResponseHelper } from '@shared/types';
 import authRoutes from './routes/authRoutes';
 
 // Express setup, middleware wiring, protected routes, health, error handling
@@ -131,6 +131,10 @@ async function startServer() {
 
     logger.info('Database connection established');
 
+    // Connect to Redis
+    await redisConnection.connect();
+    logger.info('Redis connection established');
+
     // Start the server
     app.listen(appConfig.port, appConfig.host, () => {
       logger.info(`Auth service started`, {
@@ -154,9 +158,12 @@ process.on('SIGTERM', async () => {
   try {
     await DatabaseConnection.getInstance().close();
     logger.info('Database connection closed');
+
+    // Note: Redis connection is shared, so we don't disconnect it here
+    logger.info('Auth service stopped gracefully');
   } catch (error) {
     const err = error as Error;
-    logger.error('Error closing database connection', { error: err.message });
+    logger.error('Error during shutdown', { error: err.message });
   }
 
   process.exit(0);
@@ -168,9 +175,12 @@ process.on('SIGINT', async () => {
   try {
     await DatabaseConnection.getInstance().close();
     logger.info('Database connection closed');
+
+    // Note: Redis connection is shared, so we don't disconnect it here
+    logger.info('Auth service stopped gracefully');
   } catch (error) {
     const err = error as Error;
-    logger.error('Error closing database connection', { error: err.message });
+    logger.error('Error during shutdown', { error: err.message });
   }
 
   process.exit(0);
