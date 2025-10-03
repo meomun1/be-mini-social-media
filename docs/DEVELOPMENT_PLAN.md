@@ -3,6 +3,14 @@
 ## Overview
 This document outlines a phased approach to building the mini Facebook backend using microservices architecture. Each phase builds upon the previous one, allowing for incremental development and testing.
 
+### Shared Infrastructure Approach
+The project uses a shared infrastructure layer for common technologies (Redis, Elasticsearch, RabbitMQ, WebSocket, Database utilities) while maintaining service-specific databases. This approach provides:
+- **Consistency**: Standardized connection management and key naming conventions
+- **Efficiency**: Shared connections reduce resource usage
+- **Maintainability**: Centralized configuration and updates
+- **Scalability**: Easy to add new services using the same infrastructure
+- **Database Management**: Shared utilities for migrations, seeders, and base repository patterns
+
 ## Phase 1: Foundation Setup (Week 1-2)
 **Goal**: Establish project structure and basic infrastructure
 
@@ -22,9 +30,10 @@ be-mini-social-media/
 │   ├── utils/
 │   └── middleware/
 ├── infrastructure/
-│   ├── databases/
-│   ├── message-broker/
-│   └── search-engine/
+│   ├── redis/
+│   ├── elasticsearch/
+│   ├── rabbitmq/
+│   └── websocket/
 ├── deployment/
 │   ├── docker/
 │   └── k8s/
@@ -88,34 +97,43 @@ be-mini-social-media/
 ---
 
 ## Phase 3: User Service (Week 5-6)
-**Goal**: Implement user management with Redis caching
+**Goal**: Implement user management with shared Redis infrastructure
 
-### 3.1 User Service Foundation
-- [ ] Set up Express.js server
-- [ ] Implement user profile management
-- [ ] Set up Redis connection and caching
+### 3.1 Shared Infrastructure Setup
+- [x] Create shared infrastructure layer
+- [x] Implement centralized Redis connection
+- [x] Create BaseCacheService with consistent key naming
+- [x] Set up shared Elasticsearch, RabbitMQ, WebSocket connections
+- [x] Implement shared database infrastructure with DatabaseConnectionManager
+- [x] Create BaseRepository class for common CRUD operations
+- [x] Add migration and seeder management utilities
 
-### 3.2 Core Features
-- [ ] User profile CRUD operations
-- [ ] Friend relationships
-- [ ] Privacy settings
-- [ ] User search (basic)
+### 3.2 User Service Foundation
+- [x] Set up Express.js server
+- [x] Implement user profile management
+- [x] Refactor to use shared Redis infrastructure
 
-### 3.3 Redis Integration
-- [ ] Cache user profiles
-- [ ] Cache friend lists
-- [ ] Cache privacy settings
-- [ ] Implement cache invalidation
+### 3.3 Core Features
+- [x] User profile CRUD operations
+- [x] Friend relationships
+- [x] Privacy settings
+- [x] User search (basic)
 
-### 3.4 API Endpoints
-- [ ] GET /api/v1/users/profile
-- [ ] PUT /api/v1/users/profile
-- [ ] GET /api/v1/users/:id
-- [ ] POST /api/v1/users/:id/friend
-- [ ] DELETE /api/v1/users/:id/friend
-- [ ] GET /api/v1/users/search
+### 3.4 Redis Integration
+- [x] Cache user profiles using shared infrastructure
+- [x] Cache friend lists with consistent key naming
+- [x] Cache privacy settings
+- [x] Implement cache invalidation strategies
 
-**Deliverable**: User Service with Redis caching and friend management
+### 3.5 API Endpoints
+- [x] GET /api/v1/users/profile
+- [x] PUT /api/v1/users/profile
+- [x] GET /api/v1/users/:id
+- [x] POST /api/v1/users/:id/friend
+- [x] DELETE /api/v1/users/:id/friend
+- [x] GET /api/v1/users/search
+
+**Deliverable**: ✅ **COMPLETED** - User Service with shared Redis infrastructure and friend management
 
 ---
 
@@ -156,7 +174,7 @@ be-mini-social-media/
 **Goal**: Add RabbitMQ for event-driven communication
 
 ### 5.1 Message Broker Setup
-- [ ] Set up RabbitMQ infrastructure
+- [x] Set up RabbitMQ infrastructure (shared)
 - [ ] Create event schemas and types
 - [ ] Implement event publisher/subscriber base classes
 
@@ -185,7 +203,7 @@ be-mini-social-media/
 **Goal**: Add Elasticsearch for full-text search
 
 ### 6.1 Search Infrastructure
-- [ ] Set up Elasticsearch cluster
+- [x] Set up Elasticsearch cluster (shared)
 - [ ] Create index mappings for posts and users
 - [ ] Implement search service base
 
@@ -232,6 +250,7 @@ be-mini-social-media/
 - [ ] Notification preferences
 
 ### 7.4 WebSocket Integration
+- [x] Set up WebSocket infrastructure (shared)
 - [ ] Real-time updates
 - [ ] Live chat
 - [ ] Live notifications

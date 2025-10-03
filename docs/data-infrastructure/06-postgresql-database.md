@@ -43,11 +43,95 @@ PostgreSQL serves as our primary relational database system, implementing the **
 
 ## 🔧 Database Connection Management
 
-### Service-Specific Database Connection
+### Shared Database Infrastructure
+The infrastructure layer provides centralized database connection management through the `infrastructure/databases/` folder, which includes:
+
+- **`connection.ts`** - DatabaseConnectionManager for managing multiple database pools
+- **`baseRepository.ts`** - BaseRepository class with common CRUD operations
+- **`migrations.ts`** - Migration management utilities
+- **`seeders.ts`** - Database seeding utilities
+- **`types.ts`** - Database-related TypeScript types
+
+### DatabaseConnectionManager
 ```typescript
-// infrastructure/database/connection.ts
+// infrastructure/databases/connection.ts
 import { Pool, PoolClient } from 'pg';
-import { logger } from '@/shared/utils/logger';
+import { createLogger } from '@shared/types';
+
+export class DatabaseConnectionManager {
+  private pools: Map<string, ConnectionPool> = new Map();
+  
+  async createConnection(serviceName: string, config: DatabaseConfig): Promise<Pool> {
+    // Creates and manages database connection pools for each service
+  }
+  
+  getPool(serviceName: string): Pool {
+    // Returns the database pool for a specific service
+  }
+  
+  async query<T>(serviceName: string, text: string, params?: any[]): Promise<T[]> {
+    // Execute queries with automatic connection management
+  }
+  
+  async transaction<T>(serviceName: string, callback: (client: PoolClient) => Promise<T>): Promise<T> {
+    // Execute operations within a transaction
+  }
+}
+```
+
+### BaseRepository Class
+```typescript
+// infrastructure/databases/baseRepository.ts
+export abstract class BaseRepository<T> {
+  protected pool: Pool;
+  protected tableName: string;
+
+  constructor(pool: Pool, tableName: string) {
+    this.pool = pool;
+    this.tableName = tableName;
+  }
+
+  async findById(id: string): Promise<T | null> {
+    // Find a record by ID
+  }
+
+  async findByField(field: string, value: any): Promise<T[]> {
+    // Find records by a specific field
+  }
+
+  async insert(data: Partial<T>): Promise<T> {
+    // Insert a new record
+  }
+
+  async update(id: string, data: Partial<T>): Promise<T | null> {
+    // Update a record by ID
+  }
+
+  async delete(id: string): Promise<boolean> {
+    // Delete a record by ID
+  }
+
+  async findPaginated(limit: number, offset: number): Promise<{ items: T[]; total: number }> {
+    // Get paginated results with total count
+  }
+}
+```
+
+### Usage in Services
+```typescript
+// services/auth-service/src/repositories/UserRepository.ts
+import { BaseRepository } from '@infrastructure/databases';
+import { getAuthDatabase } from '@infrastructure/databases';
+
+export class UserRepository extends BaseRepository<User> {
+  constructor() {
+    super(getAuthDatabase(), 'users');
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    return this.findOneByField('email', email);
+  }
+}
 
 class DatabaseConnection {
   private pool: Pool;
