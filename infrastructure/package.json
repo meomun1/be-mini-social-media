@@ -1,0 +1,26 @@
+{
+  "name": "@infrastructure/shared",
+  "version": "1.0.0",
+  "description": "Shared infrastructure layer for microservices",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@shared/types": "file:../shared",
+    "ioredis": "^5.3.2",
+    "@elastic/elasticsearch": "^8.11.0",
+    "amqplib": "^0.10.3",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.1",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.4",
+    "@types/uuid": "^9.0.7",
+    "@types/pg": "^8.10.9",
+    "typescript": "^5.4.5"
+  }
+}
