@@ -63,7 +63,19 @@ export type ServiceName =
   | 'message'
   | 'media'
   | 'search'
-  | 'notification';
+  | 'notification'
+  | 'redis-connection'
+  | 'redis-cache'
+  | 'elasticsearch-connection'
+  | 'elasticsearch-search'
+  | 'rabbitmq-connection'
+  | 'rabbitmq-message-broker'
+  | 'websocket-connection'
+  | 'websocket-socket-manager'
+  | 'infrastructure'
+  | 'database-migrations'
+  | 'database-seeders'
+  | 'shared';
 
 export interface ServiceConfig {
   name: ServiceName;
