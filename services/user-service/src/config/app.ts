@@ -1,5 +1,5 @@
 export const appConfig = {
-  port: parseInt(process.env.USER_SERVICE_PORT || '3003'),
+  port: parseInt(process.env.USER_SERVICE_PORT || '3002'),
   host: process.env.USER_SERVICE_HOST || 'localhost',
   version: process.env.SERVICE_VERSION || '1.0.0',
   environment: process.env.NODE_ENV || 'development',

@@ -1,5 +1,5 @@
 {
-  "name": "@infrastructure/shared",
+  "name": "infrastructure-shared",
   "version": "1.0.0",
   "description": "Shared infrastructure layer for microservices",
   "main": "dist/index.js",

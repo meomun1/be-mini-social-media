@@ -10,6 +10,7 @@ import { AuthMiddlewareImpl } from '../../../shared/dist/middleware/auth';
 import { jwtConfig } from './config/app';
 import { createLogger, ApiResponseHelper } from '@shared/types';
 import authRoutes from './routes/authRoutes';
+import { swaggerUi, specs } from './swagger';
 
 // Express setup, middleware wiring, protected routes, health, error handling
 
@@ -38,6 +39,17 @@ app.use(limiter);
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Swagger documentation
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(specs, {
+    explorer: true,
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'Auth Service API Documentation',
+  })
+);
 
 // Request logging middleware
 app.use((req, res, next) => {

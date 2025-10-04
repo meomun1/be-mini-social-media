@@ -1,3 +1,4 @@
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -7,6 +8,10 @@ import { redisConnection } from '../../../infrastructure/dist/redis/connection';
 import { appConfig, corsConfig, rateLimitConfig } from './config/app';
 import { createLogger } from '@shared/types';
 import userRoutes from './routes/userRoutes';
+import { swaggerUi, specs } from './swagger';
+
+// Load environment variables
+dotenv.config();
 
 const logger = createLogger('user');
 
@@ -36,6 +41,17 @@ class UserServiceApp {
     // Body parsing middleware
     this.app.use(express.json({ limit: '10mb' }));
     this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+    // Swagger documentation
+    this.app.use(
+      '/api-docs',
+      swaggerUi.serve,
+      swaggerUi.setup(specs, {
+        explorer: true,
+        customCss: '.swagger-ui .topbar { display: none }',
+        customSiteTitle: 'User Service API Documentation',
+      })
+    );
 
     // Request logging middleware
     this.app.use((req, res, next) => {

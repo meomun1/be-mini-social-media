@@ -9,7 +9,11 @@ export class DatabaseConnection {
 
   private constructor() {
     this.pool = new Pool({
-      connectionString: process.env.USER_DB_URL,
+      host: process.env.USER_DB_HOST || 'localhost',
+      port: parseInt(process.env.USER_DB_PORT || '5433'),
+      database: process.env.USER_DB_NAME || 'users_db',
+      user: process.env.USER_DB_USER || 'users_user',
+      password: process.env.USER_DB_PASSWORD || 'users_password',
       max: 20, // Maximum number of clients in the pool
       idleTimeoutMillis: 30000, // How long a client is allowed to remain idle before being closed
       connectionTimeoutMillis: 2000, // How long the pool will wait for a connection to be established
